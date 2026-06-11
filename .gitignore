@@ -1,0 +1,28 @@
+# PKI演示系统 - Git忽略规则
+# 排除内部评估文档、运行时数据、密钥等敏感文件
+
+# === 内部评估/分析文档 ===
+安全审计与生产可行性评估报告.md
+整改验收报告.md
+阶段1_PDF关键信息提取.md
+阶段2_PKI体系构建大纲规划.md
+DEV_LOG.md
+PKI体系综述.pdf
+pdf_content.txt
+
+# === 旧版单文件系统（已被pki_demo/新版取代）===
+mini_pki_demo.py
+
+# === 运行时数据（含审计日志、用户数据库）===
+pki_demo/data/
+
+# === 私钥文件（敏感）===
+pki_demo/keys/
+
+# === 导出的P12个人证书文件（含私钥）===
+pki_demo/export/
+
+# === Python编译缓存 ===
+__pycache__/
+*.pyc
+*.pyo
