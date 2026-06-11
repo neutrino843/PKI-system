@@ -139,7 +139,7 @@ class CertExpiryChecker:
 
         # 已过期
         if results["expired"]:
-            print(f"\n[0x1f534] 已过期证书（{len(results['expired'])}张）")
+            print(f"\n[已过期] 已过期证书（{len(results['expired'])}张）")
             print("-" * 50)
             for cert in results["expired"]:
                 print(f"  [FAIL] {cert['name']}")
@@ -148,7 +148,7 @@ class CertExpiryChecker:
 
         # 紧急到期
         if results["critical"]:
-            print(f"\n[0x1f7e0] 即将到期（{self.critical_days}天内，{len(results['critical'])}张）")
+            print(f"\n[紧急] 即将到期（{self.critical_days}天内，{len(results['critical'])}张）")
             print("-" * 50)
             for cert in results["critical"]:
                 print(f"  [WARN] {cert['name']}")
@@ -156,7 +156,7 @@ class CertExpiryChecker:
 
         # 提醒到期
         if results["warning"]:
-            print(f"\n[0x1f7e1] 将到期（{self.warning_days}天内，{len(results['warning'])}张）")
+            print(f"\n[提醒] 将到期（{self.warning_days}天内，{len(results['warning'])}张）")
             print("-" * 50)
             for cert in results["warning"]:
                 print(f"  [INFO] {cert['name']}")
@@ -164,7 +164,7 @@ class CertExpiryChecker:
 
         # 有效证书
         if results["valid"]:
-            print(f"\n[0x1f7e2] 有效证书（{len(results['valid'])}张）")
+            print(f"\n[有效] 有效证书（{len(results['valid'])}张）")
             print("-" * 50)
             for cert in results["valid"]:
                 print(f"  [OK] {cert['name']}")
@@ -174,10 +174,10 @@ class CertExpiryChecker:
         total = sum(len(v) for v in results.values())
         print(f"\n{'='*60}")
         print(f"  汇总：共 {total} 张证书")
-        print(f"  [0x1f534] 已过期：{len(results['expired'])}  |  "
-              f"[0x1f7e0] 紧急：{len(results['critical'])}  |  "
-              f"[0x1f7e1] 提醒：{len(results['warning'])}  |  "
-              f"[0x1f7e2] 有效：{len(results['valid'])}")
+        print(f"  [已过期] {len(results['expired'])}  |  "
+              f"[紧急] {len(results['critical'])}  |  "
+              f"[提醒] {len(results['warning'])}  |  "
+              f"[有效] {len(results['valid'])}")
 
 
 # ============================================================

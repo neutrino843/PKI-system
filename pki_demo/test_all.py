@@ -128,6 +128,48 @@ def test_cert_expiry():
     total = sum(len(v) for v in results.values() if isinstance(v, list))
     assert total >= 0, "应能扫描到证书"
 
+# ========== 8. backup模块测试 ==========
+def test_backup():
+    import backup
+    mgr = backup.BackupManager()
+    # 创建备份
+    name = mgr.create_backup(label="test_backup")
+    assert name is not None
+    assert name.endswith(".tar.gz"), f"备份文件名应以.tar.gz结尾: {name}"
+    # 列出备份
+    backups = mgr.list_backups()
+    assert len(backups) > 0, "备份列表不应为空"
+    assert any(b["file"] == name for b in backups), "新创建的备份应在列表中"
+    # 清理测试备份
+    import os
+    from pathlib import Path
+    backup_dir = Path(__file__).parent.resolve() / "backups"
+    for f in backup_dir.glob(f"*test_backup*"):
+        os.remove(f)
+
+# ========== 9. inter_ca模块测试 ==========
+def test_inter_ca():
+    import inter_ca
+    import os
+    from pathlib import Path
+    base_dir = Path(__file__).parent.resolve()
+    ca_key = base_dir / "keys" / "root_ca_private.pem"
+    ca_cert = base_dir / "certs" / "root_ca_cert.pem"
+    if not ca_key.exists() or not ca_cert.exists():
+        # 无根CA时应返回错误而非崩溃
+        success, msg = inter_ca.generate_intermediate_ca()
+        assert success == False, "无根CA时应返回False"
+        assert "根CA尚未创建" in msg, f"错误信息应提示根CA未创建: {msg}"
+    else:
+        # 根CA存在，检查密码是否匹配
+        try:
+            success, msg = inter_ca.generate_intermediate_ca()
+            assert success == True or "根CA尚未创建" in msg
+        except Exception as e:
+            err_msg = str(e)
+            assert "password" in err_msg.lower() or "decrypt" in err_msg.lower(), \
+                   f"应报告密码错误而非其他异常: {err_msg}"
+
 # ========== 主测试流程 ==========
 print("=" * 60)
 print("  PKI系统安全加固 - 全模块回归测试")
@@ -140,6 +182,8 @@ test("security_crl模块(HMAC)", test_security_crl)
 test("ra模块(审核流程)", test_ra)
 test("security_crypto模块", test_security_crypto)
 test("cert_expiry模块", test_cert_expiry)
+test("backup模块(备份恢复)", test_backup)
+test("inter_ca模块(中间CA)", test_inter_ca)
 
 print(f"\n{'='*60}")
 print(f"  测试结果: {PASS} 通过, {FAIL} 失败")

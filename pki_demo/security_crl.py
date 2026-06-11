@@ -82,7 +82,7 @@ class SecureRevokedList:
             expected_hmac = self._calculate_hmac(data)
 
             if stored_hmac != expected_hmac:
-                print("\n[0x1f6a8] [安全告警] CRL吊销数据完整性校验失败！")
+                print("\n[安全告警] CRL吊销数据完整性校验失败！")
                 print("   数据可能已被篡改！将使用空列表继续运行。")
                 print(f"   预期HMAC：{expected_hmac[:16]}...")
                 print(f"   实际HMAC：{stored_hmac[:16]}...")

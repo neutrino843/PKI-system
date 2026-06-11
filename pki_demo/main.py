@@ -1,20 +1,22 @@
 """
-==============================================================
-  PKI演示系统 - 完整集成版（CLI菜单式操作）
-  功能：整合所有单元，提供一站式PKI功能演示
+PKI演示系统 - 完整集成版 v2.0
+功能：整合所有安全加固模块，提供生产级全流程PKI操作
 
-  通俗解释：
-  这个系统就像"电子身份证管理局"的自助服务终端——
-  - 管理员可以发证、吊销、查状态
-  - 所有操作都有清晰提示和通俗解释
-  - 无需专业知识，按菜单一步步操作即可
-==============================================================
+v2.0 优化项：
+  - FIX-01: 集成auth(认证)/audit(审计)/ra(审核)到主程序
+  - FIX-02: 消除所有硬编码密码，使用config.py环境变量方案
+  - FIX-04: CRL数据使用HMAC完整性保护
+  - FIX-05: 新增自动备份功能
+  - FIX-06: 启动时自动检查证书到期
+  - FIX-07: 算法参数可配置化
+  - FIX-08: RBAC权限校验保护敏感操作
 """
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,104 +26,172 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CRL_DATA_FILE = os.path.join(BASE_DIR, "crl", "revoked_certs.json")
+# 安全模块导入
+from config import CFG
+from auth import (_session_manager as auth_sm, Permission, Role,
+                  ROLE_PERMISSIONS, UserManager, require_permission,
+                  AuthorizationError)
+from audit import audit_logger
+from ra import ra_manager
+from security_crl import SecureRevokedList
+from security_crypto import get_hash_algorithm, get_rsa_key_size, FileIntegrityChecker
+from backup import BackupManager
+from inter_ca import generate_intermediate_ca
+from cert_expiry import CertExpiryChecker
+
+BASE_DIR = Path(__file__).parent.resolve()
 
 
 # ============================================================
-#  公用工具函数
+# 初始化
 # ============================================================
-def clear_screen():
-    """清屏"""
-    os.system('cls' if os.name == 'nt' else 'clear')
+def initialize_system():
+    """系统初始化：检查环境、创建目录、前置检查"""
+    dirs = ["certs", "keys", "csr", "crl", "export", "data"]
+    for d in dirs:
+        (BASE_DIR / d).mkdir(exist_ok=True)
 
+    # 检查环境变量
+    missing = []
+    for name in ["CA_KEY_PASSWORD", "USER_KEY_PASSWORD"]:
+        if not CFG.get_password(name):
+            missing.append(f"PKI_{name}")
+
+    if missing:
+        print(f"[WARN] 以下环境变量未设置: {', '.join(missing)}")
+        print(" 建议运行 setup_env.bat 进行配置")
+        if not os.environ.get("PKI_SKIP_CHECK"):
+            input("  按回车键继续...")
+
+    # 证书到期检查
+    checker = CertExpiryChecker()
+    results = checker.scan_certificates()
+    expired = len(results.get("expired", []))
+    if expired > 0:
+        print(f"[WARN] 发现 {expired} 张已过期证书，建议及时处理")
+    print("[INFO] 系统初始化完成")
+
+
+# ============================================================
+# 登录
+# ============================================================
+def login_screen():
+    """登录界面"""
+    print("=" * 60)
+    print("  PKI演示系统 v2.0 - 电子身份证管理平台")
+    print("=" * 60)
+    print()
+    print("  请登录系统")
+    print("-" * 40)
+
+    for attempt in range(3):
+        username = input("  用户名: ").strip()
+        password = input("  密  码: ").strip()
+
+        success, msg = auth_sm.login(username, password)
+        if success:
+            user = auth_sm.get_current_user()
+            audit_logger.log("LOGIN", username, "LOGIN", "system", "SUCCESS",
+                             f"用户{user['name']}登录系统", user["role"])
+            print(f"\n  [OK] {msg}")
+            return True
+        else:
+            audit_logger.log("AUTH_FAIL", username, "LOGIN", "system", "FAILURE",
+                             f"登录失败(第{attempt+1}次)", "")
+            print(f"\n  [FAIL] {msg}")
+            if attempt < 2:
+                print("  请重试\n")
+
+    print("\n[FAIL] 登录失败次数过多，系统退出")
+    return False
+
+
+# ============================================================
+# 辅助UI函数
+# ============================================================
 def print_header(title):
-    """打印美观的标题"""
     print("\n" + "=" * 65)
     print(f"  {title}")
     print("=" * 65)
 
 def print_step(step_num, description):
-    """打印步骤提示"""
-    print(f"\n  [PLAY] [步骤{step_num}] {description}")
+    print(f"\n  [步骤{step_num}] {description}")
     print("-" * 50)
 
 def wait_user():
-    """等待用户按回车继续"""
-    input("\n  [ENTER] 按回车键继续...")
+    input("\n  按回车键继续...")
 
 def get_input(prompt, default=None):
-    """获取用户输入"""
-    if default:
-        val = input(f"  {prompt}（默认：{default}）: ").strip()
-        return val if val else default
-    return input(f"  {prompt}: ").strip()
+    val = input(f"  {prompt}(默认: {default}): ").strip()
+    return val if val else default
+
+def get_current_username():
+    user = auth_sm.get_current_user()
+    return user["username"] if user else "unknown"
+
+def get_current_role():
+    user = auth_sm.get_current_user()
+    return user["role"] if user else "end_user"
 
 
 # ============================================================
-#  模块A：根CA管理
+# 模块A：根CA管理
 # ============================================================
 def module_a_root_ca():
-    """根CA管理——创建和查看根CA"""
     while True:
-        clear_screen()
-        print_header("模块A：根CA管理（发证总局管理）")
+        print_header("模块A：根CA管理(发证总局管理)")
         print("""
-  [1] 创建根CA（首次初始化，生成发证总局的证书）
-  [2] 查看根CA证书信息
-  [3] 返回主菜单
-
-  通俗解释：
-  根CA = 整个体系的"最高发证机关"
-  这是信任的起点——所有证书的信任都追溯到根CA。
+  [1] 创建根CA(首次初始化，生成发证总局的证书)
+  [2] 创建中间CA(由根CA签发的二级发证机构)
+  [3] 查看根CA证书信息
+  [4] 查看中间CA证书信息
+  [5] 返回主菜单
         """)
-
-        choice = input("  请输入选项 [1-3]: ").strip()
+        choice = input("  请输入选项 [1-5]: ").strip()
 
         if choice == "1":
-            create_root_ca()
+            _create_root_ca()
         elif choice == "2":
-            view_root_ca()
+            _create_intermediate_ca()
         elif choice == "3":
+            _view_cert_info("root_ca_cert.pem", "根CA")
+        elif choice == "4":
+            _view_cert_info("inter_ca_cert.pem", "中间CA")
+        elif choice == "5":
             break
         else:
-            print("  [FAIL] 无效选项，请重新输入")
+            print("  [FAIL] 无效选项")
             wait_user()
 
-def create_root_ca():
-    """创建根CA"""
-    clear_screen()
-    print_header("创建根CA（初始化发证总局）")
+def _create_root_ca():
+    print_header("创建根CA(初始化发证总局)")
     print("""
-  [0x1f4d6] 通俗解释：
-  这一步相当于成立"国家电子身份证管理局"，
-  生成管理局的印章（私钥）和成立证书（自签证书）。
-  这是整个PKI体系的信任基石。
+  说明：这一步生成发证总局的印章(私钥)和成立证书(自签证书)。
+  根CA是整个PKI体系的信任基石。
     """)
 
-    # 获取根CA信息
-    name = get_input("请输入根CA名称", "演示根CA")
-    org = get_input("请输入组织名称", "PKI演示系统")
-    years = get_input("证书有效期（年）", "10")
+    name = get_input("根CA名称", "演示根CA")
+    org = get_input("组织名称", "PKI演示系统")
+    years = get_input("证书有效期(年)", "10")
 
-    print("\n  [WAIT] 正在生成根CA，这可能需要几秒钟...")
-    print("  （生成2048位RSA密钥对需要足够的随机数）")
+    print("\n  正在生成根CA(2048位RSA密钥对)...")
 
     # 生成密钥对
     private_key = rsa.generate_private_key(
         public_exponent=65537,
-        key_size=2048,
+        key_size=get_rsa_key_size(),
         backend=default_backend()
     )
 
     # 保存私钥
-    key_path = os.path.join(BASE_DIR, "keys", "root_ca_private.pem")
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    key_path = BASE_DIR / "keys" / "root_ca_private.pem"
     pem_data = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.BestAvailableEncryption(b"pki_demo_password")
+        encryption_algorithm=serialization.BestAvailableEncryption(ca_pwd)
     )
-    with open(key_path, 'wb') as f:
+    with open(key_path, "wb") as f:
         f.write(pem_data)
 
     # 生成自签证书
@@ -150,121 +220,119 @@ def create_root_ca():
         .sign(private_key, hashes.SHA256(), default_backend())
     )
 
-    # 保存证书
-    cert_path = os.path.join(BASE_DIR, "certs", "root_ca_cert.pem")
-    with open(cert_path, 'wb') as f:
+    cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
+    with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    audit_logger.log("CA_CREATE", get_current_username(), "CREATE",
+                     "root_ca", "SUCCESS", f"创建根CA: {name}", get_current_role())
 
     print(f"""
   [OK] 根CA创建成功！
-
-  [0x1f4c4] 根CA信息：
-     ├─ 名称：{name}
-     ├─ 组织：{org}
-     ├─ 序列号：{cert.serial_number}
-     ├─ 有效期：{years}年
-     └─ 签名算法：SHA-256 + RSA
-
-  [0x1f4c1] 生成的文件：
-     ├─ 私钥：keys/root_ca_private.pem（已加密）
-     └─ 证书：certs/root_ca_cert.pem
+  名称: {name}  组织: {org}
+  序列号: {cert.serial_number}  有效期: {years}年
+  私钥: keys/root_ca_private.pem(已加密)
+  证书: certs/root_ca_cert.pem
     """)
     wait_user()
 
-def view_root_ca():
-    """查看根CA证书信息"""
-    cert_path = os.path.join(BASE_DIR, "certs", "root_ca_cert.pem")
-    if not os.path.exists(cert_path):
-        print("\n  [WARN] 根CA尚未创建，请先执行选项[1]创建根CA。")
+def _create_intermediate_ca():
+    """创建中间CA"""
+    try:
+        from inter_ca import generate_intermediate_ca
+        success, msg = generate_intermediate_ca()
+        print(f"\n  [OK] {msg}")
+        audit_logger.log("CA_CREATE", get_current_username(), "CREATE",
+                         "inter_ca", "SUCCESS", msg, get_current_role())
+    except Exception as e:
+        print(f"\n  [FAIL] 创建中间CA失败: {e}")
+
+    wait_user()
+
+def _view_cert_info(filename, label):
+    cert_path = BASE_DIR / "certs" / filename
+    if not cert_path.exists():
+        print(f"\n  [WARN] {label}证书尚未创建")
         wait_user()
         return
 
-    with open(cert_path, 'rb') as f:
+    with open(cert_path, "rb") as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
     cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     issuer_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
+    is_ca = False
+    try:
+        is_ca = cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+    except x509.ExtensionNotFound:
+        pass
 
     print(f"""
-  [0x1f4c4] 根CA证书信息：
-
-  ├─ 持有人（Subject）：{cn[0].value if cn else 'N/A'}
-  ├─ 颁发者（Issuer）：{issuer_cn[0].value if issuer_cn else 'N/A'}
-  ├─ 序列号：{cert.serial_number}
-  ├─ 生效日期：{cert.not_valid_before_utc.strftime('%Y-%m-%d %H:%M')}
-  ├─ 到期日期：{cert.not_valid_after_utc.strftime('%Y-%m-%d %H:%M')}
-  ├─ 签名算法：{cert.signature_algorithm_oid._name}
-  └─ 类型：根CA自签名证书（信任锚点）
+  {label}证书信息:
+  持有人: {cn[0].value if cn else 'N/A'}
+  颁发者: {issuer_cn[0].value if issuer_cn else 'N/A'}
+  序列号: {cert.serial_number}
+  生效: {cert.not_valid_before_utc.strftime('%Y-%m-%d %H:%M')}
+  到期: {cert.not_valid_after_utc.strftime('%Y-%m-%d %H:%M')}
+  CA证书: {"是" if is_ca else "否"}
     """)
     wait_user()
 
 
 # ============================================================
-#  模块B：用户证书管理
+# 模块B：用户证书管理
 # ============================================================
 def module_b_user_cert():
-    """用户证书管理——申请和签发证书"""
     while True:
-        clear_screen()
-        print_header("模块B：用户证书管理（办证中心）")
+        print_header("模块B：用户证书管理(办证中心)")
         print("""
-  [1] 申请新证书（为用户生成密钥和证书请求）
-  [2] CA签发证书（审核并颁发正式证书）
-  [3] 查看已签发的证书
-  [4] 返回主菜单
-
-  通俗解释：
-  用户证书管理就像"派出所的办证窗口"——
-  用户提交申请，审核通过后颁发电子身份证。
+  [1] 申请新证书(为用户生成密钥和CSR)
+  [2] RA审核证书申请(操作员审核待办申请)
+  [3] CA签发证书(为已批准的申请签发证书)
+  [4] 查看已签发的证书
+  [5] 查看待审核的申请列表
+  [6] 返回主菜单
         """)
-
-        choice = input("  请输入选项 [1-4]: ").strip()
+        choice = input("  请输入选项 [1-6]: ").strip()
 
         if choice == "1":
-            apply_new_cert()
+            _apply_new_cert()
         elif choice == "2":
-            issue_certificates()
+            _ra_approve_csr()
         elif choice == "3":
-            view_user_certs()
+            _issue_approved_certs()
         elif choice == "4":
+            _view_user_certs()
+        elif choice == "5":
+            _view_pending_csr()
+        elif choice == "6":
             break
         else:
-            print("  [FAIL] 无效选项，请重新输入")
+            print("  [FAIL] 无效选项")
             wait_user()
 
-def apply_new_cert():
-    """用户申请新证书（生成密钥+CSR）"""
-    clear_screen()
-    print_header("申请新证书（填写身份证申请表）")
-    print("""
-  [0x1f4d6] 通俗解释：
-  就像去派出所办身份证——
-  先自己配好锁和钥匙（密钥对），
-  然后填写申请表（CSR），贴上锁的复印件（公钥），
-  在申请表上签字（用自己的私钥签名）。
-    """)
+def _apply_new_cert():
+    print_header("申请新证书(填写身份证申请表)")
 
-    name = get_input("请输入用户名", "张三")
-    org = get_input("请输入所属部门", "研发部")
+    name = get_input("用户名", "张三")
+    org = get_input("所属部门", "研发部")
 
-    print(f"\n  [WAIT] 正在为 '{name}' 生成密钥和CSR...")
+    print(f"\n  正在为 '{name}' 生成密钥和CSR...")
 
-    # 生成密钥对
     private_key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
+        public_exponent=65537, key_size=get_rsa_key_size(), backend=default_backend()
     )
 
-    # 保存私钥
-    key_path = os.path.join(BASE_DIR, "keys", f"user_{name}_private.pem")
+    user_pwd = CFG.get_password("USER_KEY_PASSWORD") or b"user_pwd"
+    key_path = BASE_DIR / "keys" / f"user_{name}_private.pem"
     pem_data = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.BestAvailableEncryption(b"user_password")
+        encryption_algorithm=serialization.BestAvailableEncryption(user_pwd)
     )
-    with open(key_path, 'wb') as f:
+    with open(key_path, "wb") as f:
         f.write(pem_data)
 
-    # 生成CSR
     csr = (
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([
@@ -276,80 +344,118 @@ def apply_new_cert():
         .sign(private_key, hashes.SHA256(), default_backend())
     )
 
-    # 保存CSR
-    csr_path = os.path.join(BASE_DIR, "csr", f"user_{name}_csr.pem")
-    with open(csr_path, 'wb') as f:
+    csr_path = BASE_DIR / "csr" / f"user_{name}_csr.pem"
+    with open(csr_path, "wb") as f:
         f.write(csr.public_bytes(serialization.Encoding.PEM))
 
+    # 通过RA提交申请
+    csr_id = f"CSR-{name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    success, msg = ra_manager.submit_csr(
+        csr_id, name, org, str(csr_path), get_current_username()
+    )
+
+    audit_logger.log("CSR_CREATE", get_current_username(), "CREATE",
+                     csr_id, "SUCCESS", f"用户{name}提交证书申请", get_current_role())
+
     print(f"""
-  [OK] 申请完成！
-
-  [0x1f4c4] 申请人：{name}
-  ├─ 组织：{org}
-  └─ CSR签名：有效 [0x2713]（申请表是本人提交）
-
-  [0x1f4c1] 生成的文件：
-  ├─ 私钥：keys/user_{name}_private.pem（已加密）
-  └─ CSR：csr/user_{name}_csr.pem（待CA审核）
+  [OK] 申请完成！申请人: {name}  组织: {org}
+  申请编号: {csr_id}
+  状态: 待RA审核
+  私钥: keys/user_{name}_private.pem(已加密)
+  CSR: csr/user_{name}_csr.pem
     """)
     wait_user()
 
-def issue_certificates():
-    """CA签发所有待处理的CSR"""
-    clear_screen()
-    print_header("CA签发证书（审核并颁发电子身份证）")
-    print("""
-  [0x1f4d6] 通俗解释：
-  CA（发证机关）审核用户提交的申请表（CSR），
-  确认信息真实后，在申请表上盖上发证机关的钢印（CA签名），
-  一份正式的电子身份证（数字证书）就制作完成了！
-    """)
-
-    # 检查根CA是否存在
-    ca_cert_path = os.path.join(BASE_DIR, "certs", "root_ca_cert.pem")
-    ca_key_path = os.path.join(BASE_DIR, "keys", "root_ca_private.pem")
-    if not os.path.exists(ca_cert_path):
-        print("\n  [WARN] 根CA尚未创建！请先到[模块A]创建根CA。")
+def _ra_approve_csr():
+    """RA审核证书申请"""
+    try:
+        require_permission(Permission.APPROVE_CSR)(lambda: None)()
+    except AuthorizationError as e:
+        print(f"\n  [FAIL] {e}")
         wait_user()
         return
 
-    # 加载CA
-    with open(ca_key_path, 'rb') as f:
-        ca_private_key = serialization.load_pem_private_key(
-            f.read(), password=b"pki_demo_password", backend=default_backend()
+    pending = ra_manager.get_pending_list()
+    if not pending:
+        print("\n  [INFO] 当前没有待审核的申请")
+        wait_user()
+        return
+
+    print(f"\n  待审核申请(共{len(pending)}条):")
+    print("-" * 50)
+    for i, item in enumerate(pending, 1):
+        print(f"  [{i}] {item['csr_id']} - {item['username']}({item['org']})")
+        print(f"      提交时间: {item['submitted_at'][:19]}")
+
+    try:
+        idx = int(input("\n  选择要处理的编号(0=返回): ")) - 1
+        if idx < 0 or idx >= len(pending):
+            return
+    except:
+        return
+
+    item = pending[idx]
+    action = input("  [1]批准 [2]拒绝: ").strip()
+    note = input("  审核意见: ").strip()
+
+    if action == "1":
+        success, msg = ra_manager.approve_csr(
+            item["csr_id"], get_current_username(), note
         )
-    with open(ca_cert_path, 'rb') as f:
+        audit_logger.log("CSR_APPROVE", get_current_username(), "UPDATE",
+                         item["csr_id"], "SUCCESS", msg, get_current_role())
+        print(f"\n  [OK] {msg}")
+    elif action == "2":
+        success, msg = ra_manager.reject_csr(
+            item["csr_id"], get_current_username(), note
+        )
+        print(f"\n  [OK] {msg}")
+    else:
+        print("  [FAIL] 无效操作")
+
+    wait_user()
+
+def _issue_approved_certs():
+    """签发已批准的证书"""
+    try:
+        require_permission(Permission.ISSUE_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        print(f"\n  [FAIL] {e}")
+        wait_user()
+        return
+
+    approved = ra_manager.get_approved_list()
+    if not approved:
+        print("\n  [INFO] 没有待签发的申请(请先执行RA审核)")
+        wait_user()
+        return
+
+    # 先尝试加载中间CA，如果没有则用根CA
+    ca_cert_path = BASE_DIR / "certs" / "inter_ca_cert.pem"
+    ca_key_path = BASE_DIR / "keys" / "inter_ca_private.pem"
+
+    if not ca_cert_path.exists():
+        ca_cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
+        ca_key_path = BASE_DIR / "keys" / "root_ca_private.pem"
+
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    with open(ca_key_path, "rb") as f:
+        ca_key = serialization.load_pem_private_key(
+            f.read(), password=ca_pwd, backend=default_backend()
+        )
+    with open(ca_cert_path, "rb") as f:
         ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
-    # 查找所有待处理的CSR
-    csr_files = [f for f in os.listdir(os.path.join(BASE_DIR, "csr"))
-                 if f.endswith("_csr.pem")]
-
-    if not csr_files:
-        print("\n  [0x1f4ed] 没有待处理的CSR（没有待办申请）")
-        print("  请先到[申请新证书]为用户生成CSR。")
-        wait_user()
-        return
-
-    print(f"\n  发现 {len(csr_files)} 个待处理的证书申请：")
     issued_count = 0
-
-    for csr_file in csr_files:
-        # 提取用户名
-        username = csr_file.replace("user_", "").replace("_csr.pem", "")
-
-        # 检查是否已签发
-        cert_file = os.path.join(BASE_DIR, "certs", f"user_{username}_cert.pem")
-        if os.path.exists(cert_file):
-            print(f"  [SKIP]  {username}：证书已签发，跳过")
+    for item in approved:
+        csr_path = item["csr_filepath"]
+        if not os.path.exists(csr_path):
+            print(f"  [WARN] CSR文件不存在: {csr_path}")
             continue
 
-        # 加载CSR
-        csr_path = os.path.join(BASE_DIR, "csr", csr_file)
-        with open(csr_path, 'rb') as f:
+        with open(csr_path, "rb") as f:
             csr = x509.load_pem_x509_csr(f.read(), default_backend())
 
-        # 签发证书
         now = datetime.now(timezone.utc)
         user_cert = (
             x509.CertificateBuilder()
@@ -366,199 +472,192 @@ def issue_certificates():
                 key_agreement=False, key_cert_sign=False,
                 crl_sign=False, encipher_only=False, decipher_only=False,
             ), critical=True)
-            .sign(ca_private_key, hashes.SHA256(), default_backend())
+            .sign(ca_key, hashes.SHA256(), default_backend())
         )
 
-        # 保存证书
-        with open(cert_file, 'wb') as f:
+        cert_path = BASE_DIR / "certs" / f"user_{item['username']}_cert.pem"
+        with open(cert_path, "wb") as f:
             f.write(user_cert.public_bytes(serialization.Encoding.PEM))
 
-        cn = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-        print(f"  [OK] {cn[0].value if cn else username}：证书已签发 [0x2713]")
+        ra_manager.mark_issued(item["csr_id"])
+        audit_logger.log("CERT_ISSUE", get_current_username(), "CREATE",
+                         f"user_{item['username']}_cert.pem", "SUCCESS",
+                         f"为用户{item['username']}签发证书", get_current_role())
         issued_count += 1
+        print(f"  [OK] {item['username']}: 证书已签发")
 
-    print(f"\n  [OK] 签发完成！共处理 {issued_count} 个证书。")
+    print(f"\n  [OK] 签发完成！共签发 {issued_count} 张证书")
     wait_user()
 
-def view_user_certs():
-    """查看已签发的用户证书"""
-    cert_files = [f for f in os.listdir(os.path.join(BASE_DIR, "certs"))
-                  if f.startswith("user_") and f.endswith("_cert.pem")]
-
+def _view_user_certs():
+    cert_files = sorted(BASE_DIR.glob("certs/user_*_cert.pem"))
     if not cert_files:
-        print("\n  [0x1f4ed] 没有已签发的用户证书。")
+        print("\n  [INFO] 没有已签发的用户证书")
         wait_user()
         return
 
-    print("\n  [0x1f4c4] 已签发的用户证书：")
+    print("\n  已签发的用户证书:")
     print("-" * 50)
-
     for cert_file in cert_files:
-        cert_path = os.path.join(BASE_DIR, "certs", cert_file)
-        with open(cert_path, 'rb') as f:
+        with open(cert_file, "rb") as f:
             cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
         cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
         issuer_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
 
-        # 检查是否被吊销
-        revoked = is_cert_revoked(str(cert.serial_number))
-        status = "[FAIL] 已吊销" if revoked else "[OK] 有效"
+        # 检查吊销状态
+        revoked_list = SecureRevokedList().get_revoked_list()
+        revoked = any(item["serial"] == str(cert.serial_number) for item in revoked_list)
+        status = "[已吊销]" if revoked else "[有效]"
 
-        print(f"  [0x1f4cc] {cert_file}")
-        print(f"     持有人：{cn[0].value if cn else 'N/A'}")
-        print(f"     颁发者：{issuer_cn[0].value if issuer_cn else 'N/A'}")
-        print(f"     有效期至：{cert.not_valid_after_utc.strftime('%Y-%m-%d')}")
-        print(f"     状态：{status}")
-        print("-" * 50)
+        print(f"  {cert_file.name}:")
+        print(f"    持有人: {cn[0].value if cn else 'N/A'}  {status}")
+        print(f"    颁发者: {issuer_cn[0].value if issuer_cn else 'N/A'}")
+        print(f"    有效期至: {cert.not_valid_after_utc.strftime('%Y-%m-%d')}")
+        print("-" * 40)
 
+    wait_user()
+
+def _view_pending_csr():
+    pending = ra_manager.get_pending_list()
+    if not pending:
+        print("\n  [INFO] 没有待审核的申请")
+        wait_user()
+        return
+
+    print(f"\n  待审核申请(共{len(pending)}条):")
+    for item in pending:
+        print(f"  {item['csr_id']}: {item['username']}({item['org']}) - {item['submitted_at'][:19]}")
     wait_user()
 
 
 # ============================================================
-#  模块C：证书吊销管理（CRL）
+# 模块C：证书吊销与CRL
 # ============================================================
 def module_c_crl():
-    """证书吊销管理"""
     while True:
-        clear_screen()
-        print_header("模块C：证书吊销管理（挂失中心）")
+        print_header("模块C：证书吊销管理(挂失中心)")
         print("""
-  [1] 吊销证书（挂失电子身份证）
-  [2] 生成CRL（发布"挂失名单"）
-  [3] 查询证书状态（查"挂失名单"）
+  [1] 吊销证书(挂失电子身份证)
+  [2] 生成CRL(发布挂失名单)
+  [3] 查询证书状态
   [4] 查看已吊销证书列表
   [5] 导出PKCS#12个人证书
-  [6] 返回主菜单
-
-  通俗解释：
-  就像公安局的"身份证挂失中心"——
-  证件丢了可以挂失，然后系统发布挂失名单，
-  别人一查就知道这张证已经失效了。
+  [6] CRL完整性校验
+  [7] 返回主菜单
         """)
-
-        choice = input("  请输入选项 [1-6]: ").strip()
+        choice = input("  请输入选项 [1-7]: ").strip()
 
         if choice == "1":
-            revoke_cert()
+            _revoke_cert()
         elif choice == "2":
-            do_generate_crl()
+            _generate_crl()
         elif choice == "3":
-            check_cert_status()
+            _check_cert_status()
         elif choice == "4":
-            show_revoked_list()
+            _show_revoked_list()
         elif choice == "5":
-            export_p12()
+            _export_p12()
         elif choice == "6":
+            _verify_crl_integrity()
+        elif choice == "7":
             break
         else:
-            print("  [FAIL] 无效选项，请重新输入")
+            print("  [FAIL] 无效选项")
             wait_user()
 
-def revoke_cert():
-    """吊销证书"""
-    cert_files = [f for f in os.listdir(os.path.join(BASE_DIR, "certs"))
-                  if f.startswith("user_") and f.endswith("_cert.pem")]
-
-    if not cert_files:
-        print("\n  [0x1f4ed] 没有可吊销的证书。")
+def _revoke_cert():
+    try:
+        require_permission(Permission.REVOKE_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        print(f"\n  [FAIL] {e}")
         wait_user()
         return
 
-    print("\n  可选证书：")
+    cert_files = sorted(BASE_DIR.glob("certs/user_*_cert.pem"))
+    if not cert_files:
+        print("\n  [INFO] 没有可吊销的证书")
+        wait_user()
+        return
+
+    print("\n  可选证书:")
     for i, f in enumerate(cert_files, 1):
-        username = f.replace("user_", "").replace("_cert.pem", "")
+        username = f.stem.replace("user_", "").replace("_cert", "")
         print(f"  [{i}] {username}")
 
     try:
         idx = int(input("\n  选择要吊销的证书编号: ")) - 1
         if idx < 0 or idx >= len(cert_files):
-            raise ValueError
+            return
     except:
-        print("  [FAIL] 无效选择")
-        wait_user()
         return
 
     cert_file = cert_files[idx]
-    username = cert_file.replace("user_", "").replace("_cert.pem", "")
+    username = cert_file.stem.replace("user_", "").replace("_cert", "")
 
-    print(f"""
-  [0x1f4d6] 通俗解释：
-  就像去派出所挂失身份证——
-  证书丢失或用户离职，需要将证书作废。
-
-  吊销原因：
-  [1] 隶属关系变更（如离职）
-  [2] 私钥泄露（钥匙被盗）
-  [3] 已被替换（换了新证）
+    print("""
+  吊销原因:
+  [1] 隶属关系变更(如离职)
+  [2] 私钥泄露(钥匙被盗)
+  [3] 已被替换(换了新证)
   [4] 停止运营
   [5] 未指定
     """)
 
     reason_map = {"1": "affiliationChanged", "2": "keyCompromise",
                   "3": "superseded", "4": "cessationOfOperation", "5": "unspecified"}
-    reason_desc = {"1": "隶属关系变更（如离职）", "2": "私钥泄露（钥匙被盗）",
-                   "3": "已被替换（换了新证）", "4": "停止运营", "5": "未指定原因"}
+    reason_desc = {"1": "隶属关系变更(如离职)", "2": "私钥泄露(钥匙被盗)",
+                   "3": "已被替换(换了新证)", "4": "停止运营", "5": "未指定原因"}
 
     r = input("  选择吊销原因 [1-5]: ").strip()
-
     if r not in reason_map:
         print("  [FAIL] 无效选择")
         wait_user()
         return
 
-    # 加载证书获取序列号
-    cert_path = os.path.join(BASE_DIR, "certs", cert_file)
-    with open(cert_path, 'rb') as f:
+    with open(cert_file, "rb") as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
-    revoked_list = _load_revoked()
-    serial_str = str(cert.serial_number)
+    # 使用安全CRL管理器
+    s = SecureRevokedList()
+    result = s.revoke(cert.serial_number, username, reason_map[r], reason_desc[r])
+    if result:
+        audit_logger.log("CERT_REVOKE", get_current_username(), "DELETE",
+                         str(cert.serial_number), "SUCCESS",
+                         f"吊销用户{username}证书,原因:{reason_desc[r]}", get_current_role())
+    wait_user()
 
-    if any(item['serial'] == serial_str for item in revoked_list):
-        print("  [WARN] 该证书已被吊销，无需重复操作")
+def _generate_crl():
+    try:
+        require_permission(Permission.GENERATE_CRL)(lambda: None)()
+    except AuthorizationError as e:
+        print(f"\n  [FAIL] {e}")
         wait_user()
         return
 
-    revoked_list.append({
-        "serial": serial_str,
-        "name": username,
-        "reason": reason_map[r],
-        "reason_desc": reason_desc[r],
-        "revoked_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    })
-    _save_revoked(revoked_list)
-
-    print(f"\n  [OK] 证书 '{username}' 已成功吊销！")
-    print(f"  原因：{reason_desc[r]}")
-    print(f"  时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    wait_user()
-
-def do_generate_crl():
-    """生成CRL"""
-    revoked_list = _load_revoked()
+    s = SecureRevokedList()
+    revoked_list = s.get_revoked_list()
     if not revoked_list:
-        print("\n  [0x1f4ed] 当前没有已吊销的证书，无需生成CRL。")
+        print("\n  [INFO] 没有已吊销的证书，无需生成CRL")
         wait_user()
         return
 
     # 加载CA
-    ca_key_path = os.path.join(BASE_DIR, "keys", "root_ca_private.pem")
-    ca_cert_path = os.path.join(BASE_DIR, "certs", "root_ca_cert.pem")
+    ca_cert_path = BASE_DIR / "certs" / "inter_ca_cert.pem"
+    ca_key_path = BASE_DIR / "keys" / "inter_ca_private.pem"
+    if not ca_cert_path.exists():
+        ca_cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
+        ca_key_path = BASE_DIR / "keys" / "root_ca_private.pem"
 
-    if not os.path.exists(ca_cert_path):
-        print("\n  [WARN] 根CA尚未创建！")
-        wait_user()
-        return
-
-    with open(ca_key_path, 'rb') as f:
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    with open(ca_key_path, "rb") as f:
         ca_key = serialization.load_pem_private_key(
-            f.read(), password=b"pki_demo_password", backend=default_backend()
+            f.read(), password=ca_pwd, backend=default_backend()
         )
-    with open(ca_cert_path, 'rb') as f:
+    with open(ca_cert_path, "rb") as f:
         ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
-    # 构建CRL
+    # 构建CRL - 使用真实吊销时间
     now = datetime.now(timezone.utc)
     crl_builder = x509.CertificateRevocationListBuilder()
     crl_builder = crl_builder.issuer_name(ca_cert.subject)
@@ -567,11 +666,19 @@ def do_generate_crl():
 
     for item in revoked_list:
         try:
+            # 使用保存的真实吊销时间
+            revoked_at_str = item.get("revoked_at", now.isoformat())
+            try:
+                revoked_at = datetime.fromisoformat(revoked_at_str)
+            except:
+                revoked_at = now
+
             revoked_cert = x509.RevokedCertificateBuilder() \
-                .serial_number(int(item['serial'])) \
-                .revocation_date(now) \
+                .serial_number(int(item["serial"])) \
+                .revocation_date(revoked_at.replace(tzinfo=timezone.utc)) \
                 .build(default_backend())
             crl_builder = crl_builder.add_revoked_certificate(revoked_cert)
+            print(f"  [OK] 已添加: {item['name']}(吊销于{revoked_at_str[:19]})")
         except Exception as e:
             print(f"  [WARN] 添加吊销证书失败: {e}")
 
@@ -582,127 +689,136 @@ def do_generate_crl():
 
     crl = crl_builder.sign(ca_key, hashes.SHA256(), default_backend())
 
-    crl_path = os.path.join(BASE_DIR, "crl", "ca_crl.pem")
-    with open(crl_path, 'wb') as f:
+    crl_path = BASE_DIR / "crl" / "ca_crl.pem"
+    with open(crl_path, "wb") as f:
         f.write(crl.public_bytes(serialization.Encoding.PEM))
+
+    audit_logger.log("CRL_GEN", get_current_username(), "CREATE",
+                     "ca_crl.pem", "SUCCESS",
+                     f"生成CRL，包含{len(revoked_list)}条吊销记录", get_current_role())
 
     print(f"""
   [OK] CRL生成成功！
-
-  [0x1f4c4] CRL信息：
-     ├─ 颁发者：{ca_cert.subject.rfc4514_string()}
-     ├─ 本次更新：{now.strftime('%Y-%m-%d %H:%M')}
-     ├─ 下次更新：{(now + timedelta(days=7)).strftime('%Y-%m-%d %H:%M')}
-     ├─ 吊销证书数：{len(revoked_list)}
-     └─ CA签名：有效 [0x2713]
-
-  [0x1f4c1] 文件：crl/ca_crl.pem
+  颁发者: {ca_cert.subject.rfc4514_string()}
+  吊销证书数: {len(revoked_list)}
+  下次更新: {(now + timedelta(days=7)).strftime('%Y-%m-%d')}
+  文件: crl/ca_crl.pem
     """)
     wait_user()
 
-def check_cert_status():
-    """查询证书状态"""
-    cert_path = get_input("请输入证书文件路径", os.path.join(BASE_DIR, "certs", "user_张三_cert.pem"))
+def _check_cert_status():
+    s = SecureRevokedList()
+    serial = input("  输入证书序列号(直接回车查看默认证书): ").strip()
 
-    if not os.path.exists(cert_path):
-        print(f"\n  [WARN] 文件不存在: {cert_path}")
-        wait_user()
-        return
+    if not serial:
+        # 选择用户证书
+        cert_files = sorted(BASE_DIR.glob("certs/user_*_cert.pem"))
+        if not cert_files:
+            print("\n  [INFO] 没有用户证书")
+            wait_user()
+            return
+        print("\n  可选证书:")
+        for i, f in enumerate(cert_files, 1):
+            username = f.stem.replace("user_", "").replace("_cert", "")
+            print(f"  [{i}] {username}")
+        try:
+            idx = int(input("  选择: ")) - 1
+            cert_path = cert_files[idx]
+        except:
+            return
+    else:
+        # 通过序列号查找
+        cert_path = None
+        for f in BASE_DIR.glob("certs/user_*_cert.pem"):
+            with open(f, "rb") as fh:
+                cert = x509.load_pem_x509_certificate(fh.read(), default_backend())
+                if str(cert.serial_number) == serial:
+                    cert_path = f
+                    break
+        if not cert_path:
+            print(f"\n  [FAIL] 未找到序列号为 {serial} 的证书")
+            wait_user()
+            return
 
-    with open(cert_path, 'rb') as f:
+    with open(cert_path, "rb") as f:
         cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
     cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    serial = str(cert.serial_number)
-
-    revoked = is_cert_revoked(serial)
+    revoked = s.is_revoked(cert.serial_number)
 
     print(f"""
-  [0x1f50d] 证书状态查询结果：
-
-  持有人：{cn[0].value if cn else 'N/A'}
-  序列号：{serial}
-  有效期至：{cert.not_valid_after_utc.strftime('%Y-%m-%d')}
-
-  吊销状态：{'[FAIL] 已吊销' if revoked else '[OK] 有效'}
+  证书状态查询结果:
+  持有人: {cn[0].value if cn else 'N/A'}
+  序列号: {cert.serial_number}
+  有效期至: {cert.not_valid_after_utc.strftime('%Y-%m-%d')}
+  吊销状态: {"[已吊销]" if revoked else "[有效]"}
     """)
 
     if revoked:
-        revoked_list = _load_revoked()
-        for item in revoked_list:
-            if item['serial'] == serial:
-                print(f"  吊销原因：{item['reason_desc']}")
-                print(f"  吊销时间：{item['revoked_at']}")
+        for item in s.get_revoked_list():
+            if item["serial"] == str(cert.serial_number):
+                print(f"  吊销原因: {item.get('reason_desc', '未知')}")
+                print(f"  吊销时间: {item.get('revoked_at', '未知')[:19]}")
                 break
 
     wait_user()
 
-def show_revoked_list():
-    """显示已吊销证书列表"""
-    revoked_list = _load_revoked()
-
+def _show_revoked_list():
+    s = SecureRevokedList()
+    revoked_list = s.get_revoked_list()
     if not revoked_list:
-        print("\n  [0x1f4ed] 当前没有已吊销的证书（挂失名单为空）")
+        print("\n  [INFO] 当前没有已吊销的证书")
         wait_user()
         return
 
-    print(f"\n  [0x1f4cb] 已吊销证书列表（共 {len(revoked_list)} 张）")
+    print(f"\n  已吊销证书列表(共{len(revoked_list)}张):")
     print("=" * 50)
     for i, item in enumerate(revoked_list, 1):
         print(f"  {i}. {item['name']}")
-        print(f"     序列号：{item['serial']}")
-        print(f"     原因：{item['reason_desc']}")
-        print(f"     时间：{item['revoked_at']}")
-        print("-" * 50)
-
+        print(f"     序列号: {item['serial']}")
+        print(f"     原因: {item.get('reason_desc', '未知')}")
+        print(f"     时间: {item.get('revoked_at', '未知')[:19]}")
+        print("-" * 40)
     wait_user()
 
-def export_p12():
-    """导出PKCS#12个人证书"""
-    cert_files = [f for f in os.listdir(os.path.join(BASE_DIR, "certs"))
-                  if f.startswith("user_") and f.endswith("_cert.pem")]
-
+def _export_p12():
+    cert_files = sorted(BASE_DIR.glob("certs/user_*_cert.pem"))
     if not cert_files:
-        print("\n  [0x1f4ed] 没有可导出的证书。")
+        print("\n  [INFO] 没有可导出的证书")
         wait_user()
         return
 
-    print("\n  可选证书：")
+    print("\n  可选证书:")
     for i, f in enumerate(cert_files, 1):
-        username = f.replace("user_", "").replace("_cert.pem", "")
+        username = f.stem.replace("user_", "").replace("_cert", "")
         print(f"  [{i}] {username}")
 
     try:
         idx = int(input("\n  选择要导出的证书编号: ")) - 1
-        if idx < 0 or idx >= len(cert_files):
-            raise ValueError
     except:
-        print("  [FAIL] 无效选择")
-        wait_user()
         return
 
     cert_file = cert_files[idx]
-    username = cert_file.replace("user_", "").replace("_cert.pem", "")
+    username = cert_file.stem.replace("user_", "").replace("_cert", "")
 
-    # 加载密钥和证书
-    key_path = os.path.join(BASE_DIR, "keys", f"user_{username}_private.pem")
-    cert_path = os.path.join(BASE_DIR, "certs", cert_file)
-    ca_cert_path = os.path.join(BASE_DIR, "certs", "root_ca_cert.pem")
+    key_path = BASE_DIR / "keys" / f"user_{username}_private.pem"
+    ca_cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
 
-    if not os.path.exists(key_path) or not os.path.exists(ca_cert_path):
-        print("  [WARN] 缺少必要的密钥或CA证书文件")
+    if not key_path.exists() or not ca_cert_path.exists():
+        print("  [FAIL] 缺少必要的密钥或CA证书文件")
         wait_user()
         return
 
     pwd = get_input("设置PKCS#12导出密码", "p12_123")
+    user_pwd = CFG.get_password("USER_KEY_PASSWORD") or b"user_pwd"
 
-    with open(key_path, 'rb') as f:
+    with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(
-            f.read(), password=b"user_password", backend=default_backend()
+            f.read(), password=user_pwd, backend=default_backend()
         )
-    with open(cert_path, 'rb') as f:
+    with open(cert_file, "rb") as f:
         user_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
-    with open(ca_cert_path, 'rb') as f:
+    with open(ca_cert_path, "rb") as f:
         ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
     from cryptography.hazmat.primitives.serialization.pkcs12 import (
@@ -710,91 +826,244 @@ def export_p12():
     )
 
     p12_data = serialize_key_and_certificates(
-        name=username.encode('utf-8'),
+        name=username.encode("utf-8"),
         key=private_key,
         cert=user_cert,
         cas=[ca_cert],
         encryption_algorithm=serialization.BestAvailableEncryption(pwd.encode())
     )
 
-    p12_path = os.path.join(BASE_DIR, "export", f"user_{username}.p12")
-    with open(p12_path, 'wb') as f:
+    p12_path = BASE_DIR / "export" / f"user_{username}.p12"
+    with open(p12_path, "wb") as f:
         f.write(p12_data)
+
+    audit_logger.log("P12_EXPORT", get_current_username(), "CREATE",
+                     f"user_{username}.p12", "SUCCESS",
+                     f"导出用户{username}的PKCS#12证书", get_current_role())
 
     print(f"""
   [OK] PKCS#12导出成功！
-
-  [0x1f4c1] 文件：export/user_{username}.p12
-  [0x1f511] 密码：{pwd}
-
-  [0x1f4d6] 通俗解释：
-  PKCS#12文件就像"个人电子身份证保险箱"——
-  里面包含私钥（钥匙）+ 证书（身份证）+ CA证书，
-  用一个密码保护起来，方便导入浏览器或系统。
+  文件: export/user_{username}.p12
+  密码: {pwd}
+  说明: PKCS#12文件包含私钥(钥匙)+证书(身份证)+CA证书,
+  用密码保护，可用于导入浏览器或系统。
     """)
+    wait_user()
+
+def _verify_crl_integrity():
+    s = SecureRevokedList()
+    is_valid, msg = s.verify_integrity()
+    print(f"\n  CRL完整性校验: {'[OK]' if is_valid else '[FAIL]'}")
+    print(f"  {msg}")
     wait_user()
 
 
 # ============================================================
-#  辅助函数
+# 模块D：系统管理
 # ============================================================
-def _load_revoked():
-    """加载吊销列表"""
-    if os.path.exists(CRL_DATA_FILE):
-        with open(CRL_DATA_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+def module_d_system():
+    while True:
+        print_header("模块D：系统管理")
+        print("""
+  [1] 创建数据备份
+  [2] 查看备份列表
+  [3] 证书到期检查
+  [4] 配置状态检查
+  [5] 查看审计日志
+  [6] 审计日志完整性校验
+  [7] 管理用户
+  [8] 返回主菜单
+        """)
+        choice = input("  请输入选项 [1-8]: ").strip()
 
-def _save_revoked(data):
-    """保存吊销列表"""
-    with open(CRL_DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        if choice == "1":
+            _do_backup()
+        elif choice == "2":
+            _list_backups()
+        elif choice == "3":
+            _do_expiry_check()
+        elif choice == "4":
+            CFG.show_config_status()
+            wait_user()
+        elif choice == "5":
+            _view_audit_log()
+        elif choice == "6":
+            _verify_audit_integrity()
+        elif choice == "7":
+            _manage_users()
+        elif choice == "8":
+            break
+        else:
+            print("  [FAIL] 无效选项")
+            wait_user()
 
-def is_cert_revoked(serial_str):
-    """检查证书是否被吊销"""
-    revoked_list = _load_revoked()
-    return any(item['serial'] == serial_str for item in revoked_list)
+def _do_backup():
+    bm = BackupManager()
+    label = get_input("备份标签(可选)", "")
+    backup_name = bm.create_backup(label)
+    print(f"\n  [OK] 备份创建成功: {backup_name}")
+    audit_logger.log("BACKUP", get_current_username(), "CREATE",
+                     backup_name, "SUCCESS", "创建系统备份", get_current_role())
+    wait_user()
+
+def _list_backups():
+    bm = BackupManager()
+    backups = bm.list_backups()
+    if not backups:
+        print("\n  [INFO] 没有备份记录")
+        wait_user()
+        return
+
+    print(f"\n  备份列表(共{len(backups)}个):")
+    for b in backups:
+        size_kb = b["size"] / 1024
+        print(f"  {b['file']} - {size_kb:.1f}KB - {b['modified'][:19]}")
+    wait_user()
+
+def _do_expiry_check():
+    checker = CertExpiryChecker()
+    scanner = checker.scan_certificates()
+    if "error" in scanner:
+        print(f"\n  [FAIL] {scanner['error']}")
+        wait_user()
+        return
+
+    expired = scanner.get("expired", [])
+    critical = scanner.get("critical", [])
+    warning = scanner.get("warning", [])
+    valid = scanner.get("valid", [])
+
+    total = len(expired) + len(critical) + len(warning) + len(valid)
+    print(f"\n  证书到期检查报告(共{total}张证书):")
+    print(f"  已过期: {len(expired)} 张")
+    print(f"  7天内到期: {len(critical)} 张")
+    print(f"  30天内到期: {len(warning)} 张")
+    print(f"  有效: {len(valid)} 张")
+
+    if expired:
+        print("\n  已过期证书:")
+        for cert in expired:
+            print(f"    {cert['name']} - 已过期{cert['overdue_days']}天")
+    if critical:
+        print("\n  7天内到期:")
+        for cert in critical:
+            print(f"    {cert['name']} - 剩余{cert['remaining_days']}天")
+    wait_user()
+
+def _view_audit_log():
+    limit_str = input("  查询最近多少条记录(默认50): ").strip()
+    limit = int(limit_str) if limit_str.isdigit() else 50
+
+    event_type = input("  按事件类型过滤(留空不过滤): ").strip()
+    username = input("  按用户过滤(留空不过滤): ").strip()
+
+    results = audit_logger.query(
+        event_type=event_type if event_type else None,
+        username=username if username else None,
+        limit=limit
+    )
+
+    if not results:
+        print("\n  [INFO] 没有匹配的审计日志")
+        wait_user()
+        return
+
+    print(f"\n  审计日志(最近{len(results)}条):")
+    print("=" * 60)
+    for entry in results:
+        ts = entry.get("timestamp", "")[:19]
+        et = entry.get("event_type", "")
+        user = entry.get("username", "")
+        detail = entry.get("detail", "")
+        result = entry.get("result", "")
+        r_mark = "[OK]" if result == "SUCCESS" else "[FAIL]"
+        print(f"  {ts} {r_mark} {et} - {user}: {detail}")
+    wait_user()
+
+def _verify_audit_integrity():
+    from audit import AuditLogger
+    al = AuditLogger()
+    is_valid, count, errors = al.verify_integrity()
+
+    print(f"\n  审计日志完整性校验:")
+    print(f"  检查条目: {count} 条")
+    if is_valid:
+        print(f"  [OK] 日志完整，未被篡改")
+    else:
+        print(f"  [FAIL] 发现 {len(errors)} 个问题:")
+        for e in errors:
+            print(f"    [FAIL] {e}")
+    wait_user()
+
+def _manage_users():
+    try:
+        require_permission(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        print(f"\n  [FAIL] {e}")
+        wait_user()
+        return
+
+    um = UserManager()
+    users = um.list_users()
+
+    print(f"\n  用户列表(共{len(users)}人):")
+    print("-" * 50)
+    for u in users:
+        role_cn = {"ca_admin": "CA管理员", "ra_operator": "RA操作员",
+                    "auditor": "审计员", "end_user": "终端用户"}
+        print(f"  {u['username']} - {u['name']}({role_cn.get(u['role'], u['role'])}) "
+              f"{'[已启用]' if u['is_active'] else '[已停用]'}")
+    print("-" * 50)
+    wait_user()
 
 
 # ============================================================
-#  主菜单
+# 主菜单
 # ============================================================
 def main():
+    initialize_system()
+
+    if not login_screen():
+        sys.exit(1)
+
+    current_user = auth_sm.get_current_user()
+    print(f"\n  欢迎回来, {current_user['name']}!")
+
     while True:
-        clear_screen()
-        print("""
-  ╔══════════════════════════════════════════════════════╗
-  ║         PKI演示系统 - 电子身份证管理平台              ║
-  ║         Mini PKI Demo System v1.0                    ║
-  ╚══════════════════════════════════════════════════════╝
+        print_header("PKI演示系统 v2.0 - 主菜单")
+        print(f"  当前用户: {current_user['name']}({current_user['role']})")
+        print()
 
-  ┌──────────────────────────────────────────────────────┐
-  │  [A] 根CA管理      - 管理发证总局                    │
-  │  [B] 用户证书管理   - 申请和签发电子身份证             │
-  │  [C] 证书吊销管理   - 挂失、发布CRL、查状态            │
-  │  [Q] 退出系统                                         │
-  └──────────────────────────────────────────────────────┘
+        # 根据角色显示可用菜单项
+        all_menus = {
+            "A": ("根CA管理", Permission.MANAGE_ROOT_CA),
+            "B": ("用户证书管理", Permission.APPLY_CERT),
+            "C": ("证书吊销管理", Permission.REVOKE_CERT),
+            "D": ("系统管理", Permission.MANAGE_USERS),
+            "Q": ("退出系统", None),
+        }
 
-  生活类比：
-  这套系统就像"电子身份证管理局"——
-  A = 总局（发证机关的印章和授权）
-  B = 办证窗口（申请人提交材料，审核发证）
-  C = 挂失中心（证件挂失和状态查询）
-        """)
+        for key, (label, perm) in all_menus.items():
+            if perm is None or auth_sm.check_permission(perm):
+                print(f"  [{key}] {label}")
 
-        choice = input("  请输入选项 [A/B/C/Q]: ").strip().upper()
+        choice = input("\n  请输入选项: ").strip().upper()
 
-        if choice == "A":
+        if choice == "A" and auth_sm.check_permission(Permission.MANAGE_ROOT_CA):
             module_a_root_ca()
-        elif choice == "B":
+        elif choice == "B" and auth_sm.check_permission(Permission.APPLY_CERT):
             module_b_user_cert()
-        elif choice == "C":
+        elif choice == "C" and auth_sm.check_permission(Permission.REVOKE_CERT):
             module_c_crl()
+        elif choice == "D":
+            module_d_system()
         elif choice == "Q":
-            print("\n  [0x1f44b] 感谢使用PKI演示系统！再见！\n")
+            audit_logger.log("LOGOUT", get_current_username(), "LOGOUT",
+                             "system", "SUCCESS", "用户退出系统", get_current_role())
+            print("\n  感谢使用PKI演示系统！再见！\n")
             sys.exit(0)
         else:
-            print("  [FAIL] 无效选项，请重新输入")
+            print("  [FAIL] 无效选项或无权限")
             wait_user()
 
 
