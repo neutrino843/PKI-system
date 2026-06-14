@@ -15,6 +15,7 @@ v2.0 优化项：
 import os
 import sys
 import json
+import getpass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def login_screen():
 
     for attempt in range(3):
         username = input("  用户名: ").strip()
-        password = input("  密  码: ").strip()
+        password = getpass.getpass("  密  码: ").strip()
 
         success, msg = auth_sm.login(username, password)
         if success:
@@ -121,8 +122,11 @@ def print_step(step_num, description):
 def wait_user():
     input("\n  按回车键继续...")
 
-def get_input(prompt, default=None):
+def get_input(prompt, default=None, max_len=100):
     val = input(f"  {prompt}(默认: {default}): ").strip()
+    if len(val) > max_len:
+        print(f"  [WARN] 输入超过{max_len}字符，已截断")
+        val = val[:max_len]
     return val if val else default
 
 def get_current_username():
@@ -184,7 +188,9 @@ def _create_root_ca():
     )
 
     # 保存私钥
-    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
+    if not ca_pwd:
+        raise RuntimeError("环境变量 PKI_CA_KEY_PASSWORD 未设置，无法加载CA私钥")
     key_path = BASE_DIR / "keys" / "root_ca_private.pem"
     pem_data = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -323,7 +329,9 @@ def _apply_new_cert():
         public_exponent=65537, key_size=get_rsa_key_size(), backend=default_backend()
     )
 
-    user_pwd = CFG.get_password("USER_KEY_PASSWORD") or b"user_pwd"
+    user_pwd = CFG.get_password("USER_KEY_PASSWORD")
+    if not user_pwd:
+        raise RuntimeError("环境变量 PKI_USER_KEY_PASSWORD 未设置，无法加载用户私钥")
     key_path = BASE_DIR / "keys" / f"user_{name}_private.pem"
     pem_data = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -367,7 +375,7 @@ def _apply_new_cert():
     wait_user()
 
 def _ra_approve_csr():
-    """RA审核证书申请"""
+    """RA审核证书申请（含四眼原则）"""
     try:
         require_permission(Permission.APPROVE_CSR)(lambda: None)()
     except AuthorizationError as e:
@@ -384,7 +392,11 @@ def _ra_approve_csr():
     print(f"\n  待审核申请(共{len(pending)}条):")
     print("-" * 50)
     for i, item in enumerate(pending, 1):
-        print(f"  [{i}] {item['csr_id']} - {item['username']}({item['org']})")
+        status_tag = "待初审" if item["status"] == "pending" else "待二审"
+        reviewer = ""
+        if item["status"] == "first_approved":
+            reviewer = f" (已由{item.get('reviewer_1','?')}初审)"
+        print(f"  [{i}] {item['csr_id']} - {item['username']}({item['org']}) [{status_tag}]{reviewer}")
         print(f"      提交时间: {item['submitted_at'][:19]}")
 
     try:
@@ -395,23 +407,44 @@ def _ra_approve_csr():
         return
 
     item = pending[idx]
-    action = input("  [1]批准 [2]拒绝: ").strip()
-    note = input("  审核意见: ").strip()
+    current_user = get_current_username()
 
-    if action == "1":
-        success, msg = ra_manager.approve_csr(
-            item["csr_id"], get_current_username(), note
-        )
-        audit_logger.log("CSR_APPROVE", get_current_username(), "UPDATE",
-                         item["csr_id"], "SUCCESS", msg, get_current_role())
-        print(f"\n  [OK] {msg}")
-    elif action == "2":
-        success, msg = ra_manager.reject_csr(
-            item["csr_id"], get_current_username(), note
-        )
-        print(f"\n  [OK] {msg}")
+    if item["status"] == "first_approved":
+        # 二审路径
+        action = input("  [1]二审通过 [2]拒绝: ").strip()
+        note = input("  审核意见: ").strip()
+        if action == "1":
+            success, msg = ra_manager.second_approve_csr(
+                item["csr_id"], current_user, note
+            )
+            audit_logger.log("CSR_SECOND_APPROVE", current_user, "UPDATE",
+                             item["csr_id"], "SUCCESS", msg, get_current_role())
+            print(f"\n  [OK] {msg}")
+        elif action == "2":
+            success, msg = ra_manager.reject_csr(
+                item["csr_id"], current_user, note
+            )
+            print(f"\n  [OK] {msg}")
+        else:
+            print("  [FAIL] 无效操作")
     else:
-        print("  [FAIL] 无效操作")
+        # 初审路径
+        action = input("  [1]初审通过 [2]拒绝: ").strip()
+        note = input("  审核意见: ").strip()
+        if action == "1":
+            success, msg = ra_manager.approve_csr(
+                item["csr_id"], current_user, note
+            )
+            audit_logger.log("CSR_FIRST_APPROVE", current_user, "UPDATE",
+                             item["csr_id"], "SUCCESS", msg, get_current_role())
+            print(f"\n  [OK] {msg}")
+        elif action == "2":
+            success, msg = ra_manager.reject_csr(
+                item["csr_id"], current_user, note
+            )
+            print(f"\n  [OK] {msg}")
+        else:
+            print("  [FAIL] 无效操作")
 
     wait_user()
 
@@ -438,7 +471,9 @@ def _issue_approved_certs():
         ca_cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
         ca_key_path = BASE_DIR / "keys" / "root_ca_private.pem"
 
-    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
+    if not ca_pwd:
+        raise RuntimeError("环境变量 PKI_CA_KEY_PASSWORD 未设置，无法加载CA私钥")
     with open(ca_key_path, "rb") as f:
         ca_key = serialization.load_pem_private_key(
             f.read(), password=ca_pwd, backend=default_backend()
@@ -649,7 +684,9 @@ def _generate_crl():
         ca_cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
         ca_key_path = BASE_DIR / "keys" / "root_ca_private.pem"
 
-    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
+    if not ca_pwd:
+        raise RuntimeError("环境变量 PKI_CA_KEY_PASSWORD 未设置，无法加载CA私钥")
     with open(ca_key_path, "rb") as f:
         ca_key = serialization.load_pem_private_key(
             f.read(), password=ca_pwd, backend=default_backend()
@@ -810,7 +847,9 @@ def _export_p12():
         return
 
     pwd = get_input("设置PKCS#12导出密码", "p12_123")
-    user_pwd = CFG.get_password("USER_KEY_PASSWORD") or b"user_pwd"
+    user_pwd = CFG.get_password("USER_KEY_PASSWORD")
+    if not user_pwd:
+        raise RuntimeError("环境变量 PKI_USER_KEY_PASSWORD 未设置，无法加载用户私钥")
 
     with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(

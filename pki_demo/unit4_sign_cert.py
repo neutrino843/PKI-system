@@ -39,7 +39,7 @@ def load_ca_private_key(filepath, password=b"pki_demo_password"):
     从保险箱（加密文件）里取出"发证机关的印章"（CA私钥）。
     只有有了这个印章，才能给别人的证书"盖钢印"（签名）。
     """
-    print(f"\n[0x1f510] 正在加载CA私钥（发证机关印章）...")
+    print("\n[正在加载CA私钥（发证机关印章）...]")
     with open(filepath, 'rb') as f:
         pem_data = f.read()
 
@@ -113,7 +113,7 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
     user_name = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     user_common_name = user_name[0].value if user_name else "未知用户"
 
-    print(f"\n[0x1f4dc] CA正在为用户 '{user_common_name}' 签发证书...")
+    print(f"\n[CA正在为用户 '{user_common_name}' 签发证书...]")
     print(f"   ├─ 审核CSR签名：{'有效 [OK]' if _verify_csr(csr) else '无效 [FAIL]'}")
     print(f"   ├─ 证书有效期：{validity_days}天（约{validity_days//365}年）")
 
@@ -210,7 +210,7 @@ def save_user_certificate(cert, filepath):
     pem_data = cert.public_bytes(serialization.Encoding.PEM)
     with open(filepath, 'wb') as f:
         f.write(pem_data)
-    print(f"   [0x1f4be] 用户证书已保存到：{os.path.basename(filepath)}")
+    print(f"   [OK] 用户证书已保存到：{os.path.basename(filepath)}")
 
 
 # ============================================================
@@ -222,7 +222,7 @@ def display_cert_info(cert, label="证书"):
     """
     cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     issuer_cn = cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)
-    print(f"\n[0x1f4d6] {label}信息：")
+    print(f"\n[{label}信息：]")
     print(f"   ├─ 主体（持有人）：{cn[0].value if cn else '未知'}")
     print(f"   ├─ 颁发者（发证机关）：{issuer_cn[0].value if issuer_cn else '未知'}")
     print(f"   ├─ 序列号：{cert.serial_number}")
@@ -302,10 +302,10 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  [OK] 单元4完成！用户证书已签发。")
-    print(f"  [0x1f4c1] 证书文件目录：certs/")
+    print(f"  [OK] 证书文件目录：certs/")
     print(f"  ├─ user_张三_cert.pem")
     print(f"  └─ user_李四_cert.pem")
-    print(f"  [0x1f4cc] 信任链：根CA → 用户证书")
+    print(f"  [OK] 信任链：根CA → 用户证书")
     print("=" * 60)
 
 

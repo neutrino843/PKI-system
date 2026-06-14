@@ -34,10 +34,11 @@ APPROVED_FILE = BASE_DIR / "data" / "approved_csr.json"
 # ============================================================
 class CSRStatus:
     """CSR申请状态"""
-    PENDING = "pending"         # 待审核
-    APPROVED = "approved"       # 已通过
-    REJECTED = "rejected"       # 已拒绝
-    ISSUED = "issued"           # 已签发
+    PENDING = "pending"                 # 待初审
+    FIRST_APPROVED = "first_approved"   # 初审通过(需二审)
+    APPROVED = "approved"               # 二审通过(可签发)
+    REJECTED = "rejected"               # 已拒绝
+    ISSUED = "issued"                   # 已签发
 
 
 # ============================================================
@@ -137,17 +138,17 @@ class RAManager:
 
     def approve_csr(self, csr_id, reviewer="ra_operator", review_note=""):
         """
-        批准证书申请（RA操作员操作）
+        初审证书申请（RA操作员操作）- 四眼原则第1步
 
         参数：
             csr_id: 申请ID
-            reviewer: 审核人
+            reviewer: 初审人
             review_note: 审核意见
 
         通俗解释：
-        RA审核员检查用户提交的材料，
-        确认无误后，在申请表上签字同意，
-        然后放入"已批准"的文件夹，等待CA制证。
+        RA审核员1检查用户提交的材料，
+        确认无误后签字同意（初审通过），
+        还需要另一位RA审核员确认才能最终批准。
         """
         pending = self._load_pending()
 
@@ -159,17 +160,52 @@ class RAManager:
                 break
 
         if not found:
-            return False, f"未找到待审核的申请 {csr_id}"
+            return False, f"未找到待初审的申请 {csr_id}"
 
-        # 更新状态
+        # 更新为初审通过
+        found["status"] = CSRStatus.FIRST_APPROVED
+        found["reviewer_1"] = reviewer
+        found["reviewed_at_1"] = datetime.now().isoformat()
+        found["audit_history"].append({
+            "action": "first_approve",
+            "by": reviewer,
+            "at": datetime.now().isoformat(),
+            "note": review_note or "RA初审通过"
+        })
+
+        self._save_pending(pending)
+        return True, f"申请 {csr_id} 已通过初审，等待第二位RA审核员确认"
+
+    def second_approve_csr(self, csr_id, reviewer="ra_operator", review_note=""):
+        """
+        二审批准证书申请（RA操作员操作）- 四眼原则第2步
+
+        需要与初审人不同的RA操作员进行二审。
+        """
+        pending = self._load_pending()
+
+        found = None
+        for item in pending:
+            if item["csr_id"] == csr_id and item["status"] == CSRStatus.FIRST_APPROVED:
+                found = item
+                break
+
+        if not found:
+            return False, f"未找到待二审的申请 {csr_id}"
+
+        # 四眼原则：二审人不能与初审人是同一人
+        if found.get("reviewer_1") == reviewer:
+            return False, "四眼原则违规：二审人不能与初审人是同一人！"
+
+        # 更新为二审通过（可签发）
         found["status"] = CSRStatus.APPROVED
         found["approved_by"] = reviewer
         found["approved_at"] = datetime.now().isoformat()
         found["audit_history"].append({
-            "action": "approve",
+            "action": "second_approve",
             "by": reviewer,
             "at": datetime.now().isoformat(),
-            "note": review_note or "RA审核通过"
+            "note": review_note or "RA二审通过"
         })
 
         # 移动到已批准列表
@@ -181,7 +217,7 @@ class RAManager:
         pending = [item for item in pending if item["csr_id"] != csr_id]
         self._save_pending(pending)
 
-        return True, f"申请 {csr_id} 已批准，等待CA签发"
+        return True, f"申请 {csr_id} 已通过二审（四眼原则完成），等待CA签发"
 
     def reject_csr(self, csr_id, reviewer="ra_operator", reject_reason=""):
         """
@@ -190,7 +226,7 @@ class RAManager:
         pending = self._load_pending()
 
         for item in pending:
-            if item["csr_id"] == csr_id and item["status"] == CSRStatus.PENDING:
+            if item["csr_id"] == csr_id and item["status"] in [CSRStatus.PENDING, CSRStatus.FIRST_APPROVED]:
                 item["status"] = CSRStatus.REJECTED
                 item["rejected_by"] = reviewer
                 item["rejected_at"] = datetime.now().isoformat()
@@ -211,7 +247,7 @@ class RAManager:
         获取待审核列表（RA操作员查看）
         """
         return [item for item in self._load_pending()
-                if item["status"] == CSRStatus.PENDING]
+                if item["status"] in [CSRStatus.PENDING, CSRStatus.FIRST_APPROVED]]
 
     def get_approved_list(self):
         """

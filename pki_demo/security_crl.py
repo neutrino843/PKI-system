@@ -49,11 +49,14 @@ class SecureRevokedList:
         self._hmac_key = self._get_hmac_key()
 
     def _get_hmac_key(self):
-        """获取HMAC密钥（从环境变量读取）"""
-        key = os.environ.get("PKI_CRL_HMAC_KEY", "")
+        """获取HMAC密钥（环境变量必须设置，拒绝硬编码默认值）"""
+        key = os.environ.get("PKI_CRL_HMAC_KEY")
         if not key:
-            # 开发环境使用默认密钥（生产环境必须设置环境变量）
-            key = "pki_crl_dev_key_2026"
+            raise RuntimeError(
+                "严重安全错误：PKI_CRL_HMAC_KEY 环境变量未设置！\n"
+                "请运行 setup_env.bat 配置环境变量后再启动。\n"
+                "不允许使用硬编码默认密钥，否则CRL数据可被伪造。"
+            )
         return key.encode("utf-8")
 
     def _calculate_hmac(self, data):

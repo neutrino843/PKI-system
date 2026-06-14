@@ -31,7 +31,9 @@ def generate_intermediate_ca():
         return True, "中间CA证书已存在，跳过"
 
     # 加载根CA密钥和证书
-    ca_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
+    if not ca_pwd:
+        raise RuntimeError("环境变量 PKI_CA_KEY_PASSWORD 未设置，无法加载CA私钥")
     with open(ca_key_path, "rb") as f:
         ca_key = serialization.load_pem_private_key(
             f.read(), password=ca_pwd, backend=default_backend()
@@ -42,12 +44,14 @@ def generate_intermediate_ca():
     # 生成中间CA密钥对
     inter_key = rsa.generate_private_key(
         public_exponent=65537,
-        key_size=2048,
+        key_size=get_rsa_key_size(),
         backend=default_backend()
     )
 
     # 保存中间CA私钥
-    inter_pwd = CFG.get_password("CA_KEY_PASSWORD") or b"pki_demo_pwd"
+    inter_pwd = CFG.get_password("CA_KEY_PASSWORD")
+    if not inter_pwd:
+        raise RuntimeError("环境变量 PKI_CA_KEY_PASSWORD 未设置，无法保护中间CA私钥")
     pem_data = inter_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,

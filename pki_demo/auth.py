@@ -21,6 +21,7 @@
 import os
 import json
 import hashlib
+import secrets
 import time
 from datetime import datetime
 from functools import wraps
@@ -30,6 +31,11 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.resolve()
 USERS_FILE = BASE_DIR / "data" / "users.json"
 SESSIONS_FILE = BASE_DIR / "data" / "sessions.json"
+
+# 密码哈希常量
+PBKDF2_ITERATIONS = 600000  # PBKDF2迭代次数
+HASH_ALGO = "sha256"         # 底层哈希算法
+SALT_BYTES = 16              # 盐值字节数
 
 
 # ============================================================
@@ -219,9 +225,42 @@ class UserManager:
                 json.dump(default_users, f, ensure_ascii=False, indent=2)
 
     def _hash_password(self, password):
-        """密码哈希（加盐）"""
-        salt = "PKI_SALT_2026"
-        return hashlib.sha256((password + salt).encode()).hexdigest()
+        """
+        密码哈希（使用PBKDF2-HMAC-SHA256 + 随机盐）
+
+        安全性对比：
+        旧版：SHA256(password + 固定全局盐) —— 秒级可破解
+        新版：PBKDF2-HMAC-SHA256(password + 随机每用户盐, 60万次迭代) —— 抗暴力破解
+
+        返回：salt$hash 格式的字符串
+        """
+        salt = secrets.token_hex(SALT_BYTES)
+        pwd_hash = hashlib.pbkdf2_hmac(
+            HASH_ALGO,
+            password.encode("utf-8"),
+            salt.encode("utf-8"),
+            PBKDF2_ITERATIONS
+        ).hex()
+        return f"{salt}${pwd_hash}"
+
+    def _verify_password(self, password, stored):
+        """
+        验证密码（从存储格式中提取盐值后重算比较）
+
+        参数：
+            password: 用户输入的明文密码
+            stored: 存储的 salt$hash 格式字符串
+        """
+        if "$" not in stored:
+            return False
+        salt, expected_hash = stored.split("$", 1)
+        actual_hash = hashlib.pbkdf2_hmac(
+            HASH_ALGO,
+            password.encode("utf-8"),
+            salt.encode("utf-8"),
+            PBKDF2_ITERATIONS
+        ).hex()
+        return actual_hash == expected_hash
 
     def authenticate(self, username, password):
         """
@@ -242,7 +281,7 @@ class UserManager:
         if not user.get("is_active", True):
             return None
 
-        if user["password"] != self._hash_password(password):
+        if not self._verify_password(password, user["password"]):
             return None
 
         return {
@@ -313,15 +352,20 @@ SESSION_TIMEOUT = 30 * 60  # 30分钟超时
 
 class SessionManager:
     """
-    会话管理器
+    会话管理器（支持多用户并发）
+
+    旧版缺陷：使用单变量存储，后登录覆盖前用户
+    新版修复：使用Dict存储多用户会话，每个会话有独立session ID
 
     通俗解释：
-    就像登录网站后的"登录态"——
-    登录后一段时间内不用重复输入密码，
-    但离开太久就需要重新登录。
+    就像网站的登录态管理——
+    每个用户登录后获得一个唯一的"令牌"（session_id），
+    服务器根据令牌识别是哪个用户在操作。
     """
 
     def __init__(self):
+        self._sessions = {}  # {session_id: {"user": user_info, "login_time": timestamp}}
+        self._current_sid = None
         self._current_user = None
         self._login_time = None
 
@@ -335,29 +379,68 @@ class SessionManager:
         user = um.authenticate(username, password)
 
         if user:
+            # 生成随机session ID
+            sid = secrets.token_hex(32)
+            now = time.time()
+            self._sessions[sid] = {
+                "user": user,
+                "login_time": now
+            }
+            self._current_sid = sid
             self._current_user = user
-            self._login_time = time.time()
+            self._login_time = now
             return True, f"登录成功！欢迎 {user['name']}（角色：{_role_cn(user['role'])}）"
         else:
             return False, "登录失败：用户名或密码错误"
 
     def logout(self):
         """退出登录"""
+        if self._current_sid:
+            self._sessions.pop(self._current_sid, None)
+        self._current_sid = None
         self._current_user = None
         self._login_time = None
 
     def get_current_user(self):
         """获取当前登录用户"""
-        if not self._current_user:
+        if not self._current_sid:
             return None
 
-        # 检查会话是否超时
-        if self._login_time and (time.time() - self._login_time) > SESSION_TIMEOUT:
+        session = self._sessions.get(self._current_sid)
+        if not session:
+            self._current_sid = None
             self._current_user = None
             self._login_time = None
             return None
 
-        return self._current_user
+        # 检查会话是否超时
+        if (time.time() - session["login_time"]) > SESSION_TIMEOUT:
+            self._sessions.pop(self._current_sid, None)
+            self._current_sid = None
+            self._current_user = None
+            self._login_time = None
+            return None
+
+        # 更新访问时间（滑动过期）
+        session["login_time"] = time.time()
+        self._current_user = session["user"]
+        self._login_time = session["login_time"]
+        return session["user"]
+
+    def list_sessions(self):
+        """列出所有活跃会话（管理员用）"""
+        now = time.time()
+        active = []
+        expired = []
+        for sid, session in list(self._sessions.items()):
+            if (now - session["login_time"]) > SESSION_TIMEOUT:
+                expired.append(sid)
+            else:
+                active.append(session["user"]["username"])
+        # 清理过期会话
+        for sid in expired:
+            self._sessions.pop(sid, None)
+        return active
 
     def check_permission(self, permission):
         """检查当前用户是否有指定权限"""

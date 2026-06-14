@@ -44,7 +44,9 @@ def load_ca():
 
     with open(ca_key_path, 'rb') as f:
         ca_key = serialization.load_pem_private_key(
-            f.read(), password=b"pki_demo_password", backend=default_backend()
+            f.read(), password=
+            (CFG.get_password("CA_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"pki_demo_password",
+            backend=default_backend()
         )
 
     with open(ca_cert_path, 'rb') as f:
@@ -84,7 +86,7 @@ def revoke_certificate(cert_filepath, reason="unspecified"):
     cert_name = cn[0].value if cn else "未知"
     serial_num = str(cert.serial_number)
 
-    print(f"\n[0x1f6ab] 正在吊销证书：{cert_name}")
+    print(f"\n[正在吊销证书：{cert_name}]")
     print(f"   ├─ 证书序列号：{serial_num}")
     print(f"   ├─ 吊销原因：{_reason_desc(reason)}")
     print(f"   └─ 吊销时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -164,7 +166,7 @@ def generate_crl(crl_filepath=None):
     # 获取已吊销的证书列表
     revoked_list = _load_revoked_list()
 
-    print(f"\n[0x1f4cb] 正在生成证书吊销列表（CRL）...")
+    print("\n[正在生成证书吊销列表（CRL）...]")
     print(f"   ├─ 待吊销证书数：{len(revoked_list)} 个")
 
     # 构建CRL的颁发者信息
@@ -255,7 +257,7 @@ def check_certificate_status(cert_filepath, crl_filepath=None):
     cert_name = cn[0].value if cn else "未知"
     serial = cert.serial_number
 
-    print(f"\n[0x1f50d] 正在检查证书状态：{cert_name}")
+    print(f"\n[正在检查证书状态：{cert_name}]")
     print(f"   ├─ 证书序列号：{serial}")
 
     # 如果没有CRL文件，检查JSON数据
@@ -304,11 +306,11 @@ def show_revoked_list():
     """显示所有已吊销的证书列表"""
     revoked_list = _load_revoked_list()
 
-    print(f"\n[0x1f4cb] 已吊销证书列表（挂失名单）")
+    print("\n[已吊销证书列表（挂失名单）]")
     print(f"{'='*50}")
 
     if not revoked_list:
-        print("   [0x1f4cc] 当前没有已吊销的证书（挂失名单为空）")
+        print("   [INFO] 当前没有已吊销的证书（挂失名单为空）")
         return
 
     print(f"   共 {len(revoked_list)} 张证书被吊销：")
@@ -371,9 +373,9 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  [OK] 单元6+7完成！CRL功能已实现。")
-    print(f"  [0x1f4c1] CRL文件：crl/ca_crl.pem")
-    print(f"  [0x1f4c1] 吊销数据：crl/revoked_certs.json")
-    print(f"  [0x1f4cc] 功能验证：")
+    print(f"  [OK] CRL文件：crl/ca_crl.pem")
+    print(f"  [OK] 吊销数据：crl/revoked_certs.json")
+    print(f"  [INFO] 功能验证：")
     print(f"  ├─ 张三证书：已被吊销 [OK]")
     print(f"  └─ 李四证书：仍然有效 [OK]")
     print("=" * 60)

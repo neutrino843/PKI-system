@@ -11,6 +11,9 @@ OPTIMIZATION_CHECKLIST.md
 DEV_LOG.md
 PKI体系综述.pdf
 pdf_content.txt
+修改清单_v2.1.md
+生产审批复审报告.md
+阶段4_系统运行说明文档.md
 
 # === 旧版单文件系统（已被pki_demo/新版取代）===
 mini_pki_demo.py
@@ -23,6 +26,12 @@ pki_demo/keys/
 
 # === 导出的P12个人证书文件（含私钥）===
 pki_demo/export/
+
+# === 加密备份文件 ===
+pki_demo/backups/
+
+# === 本地配置文件（非版本管理）===
+pki_demo/pki_config.json
 
 # === Python编译缓存 ===
 __pycache__/

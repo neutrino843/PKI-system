@@ -77,8 +77,14 @@ class AuditLogger:
         data_dir.mkdir(exist_ok=True)
 
     def _get_hmac_key(self):
-        """获取HMAC密钥"""
-        key = os.environ.get("PKI_AUDIT_HMAC_KEY", "pki_audit_default_key")
+        """获取HMAC密钥（环境变量必须设置，拒绝硬编码默认值）"""
+        key = os.environ.get("PKI_AUDIT_HMAC_KEY")
+        if not key:
+            raise RuntimeError(
+                "严重安全错误：PKI_AUDIT_HMAC_KEY 环境变量未设置！\n"
+                "请运行 setup_env.bat 配置环境变量后再启动。\n"
+                "不允许使用硬编码默认密钥，否则审计日志可被伪造。"
+            )
         return key.encode("utf-8")
 
     def _get_last_hash(self):
@@ -152,6 +158,8 @@ class AuditLogger:
         # 写入日志文件
         with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
         # 检查异常模式
         self._check_alert_threshold(event_type)

@@ -72,7 +72,11 @@ def generate_key_pair(key_size=KEY_SIZE):
 # ============================================================
 # 核心功能2：保存私钥到文件（加密存储）
 # ============================================================
-def save_private_key(private_key, filepath, password=b"pki_demo_password"):
+def save_private_key(private_key, filepath, password=None):
+    if password is None:
+        from config import CFG
+        pwd = CFG.get_password("CA_KEY_PASSWORD")
+        password = pwd or b"pki_demo_password"
     """
     将私钥加密保存到文件
 
@@ -321,9 +325,9 @@ def main():
 
     print("\n" + "=" * 60)
     print("  [OK] 单元1完成！根CA已成功创建。")
-    print(f"  [0x1f4c1] 私钥文件：keys/root_ca_private.pem")
-    print(f"  [0x1f4c1] 公钥文件：keys/root_ca_public.pem")
-    print(f"  [0x1f4c1] 证书文件：certs/root_ca_cert.pem")
+    print(f"  [OK] 私钥文件：keys/root_ca_private.pem")
+    print(f"  [OK] 公钥文件：keys/root_ca_public.pem")
+    print(f"  [OK] 证书文件：certs/root_ca_cert.pem")
     print("=" * 60)
 
 

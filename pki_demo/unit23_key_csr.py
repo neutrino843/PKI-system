@@ -22,6 +22,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
+# 若config模块可用则导入（单元测试可使用默认密码）
+try:
+    from config import CFG
+except ImportError:
+    CFG = None
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -37,7 +43,7 @@ def generate_key_pair(key_size=2048):
     - 公钥（锁）：可以公开，交给CA去制作证书
     - 私钥（钥匙）：用户自己保管，绝不能给别人
     """
-    print("\n[0x1f511] 正在为用户生成RSA密钥对（2048位）...")
+    print("\n[正在为用户生成RSA密钥对（2048位）...]")
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=key_size,
@@ -76,7 +82,7 @@ def generate_csr(private_key, common_name, country="CN",
     返回：
         csr: 证书签名请求对象
     """
-    print(f"\n[0x1f4cb] 正在为用户 '{common_name}' 生成证书签名请求(CSR)...")
+    print(f"\n[正在为用户 '{common_name}' 生成证书签名请求(CSR)...]")
 
     # 构建申请人的身份信息
     name_attributes = [
@@ -126,7 +132,7 @@ def save_csr(csr, filepath):
     pem_data = csr.public_bytes(serialization.Encoding.PEM)
     with open(filepath, 'wb') as f:
         f.write(pem_data)
-    print(f"   [0x1f4be] CSR已保存到：{os.path.basename(filepath)}")
+    print(f"   [OK] CSR已保存到：{os.path.basename(filepath)}")
 
 
 # ============================================================
@@ -141,7 +147,7 @@ def load_and_display_csr(filepath):
 
     csr = x509.load_pem_x509_csr(pem_data, default_backend())
 
-    print(f"\n[0x1f4d6] [验证] 读取CSR信息...")
+    print("\n[验证] 读取CSR信息...")
     cn = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     print(f"   ├─ 申请人：{cn[0].value if cn else '未知'}")
     print(f"   ├─ 签名算法：{csr.signature_algorithm_oid._name}")
@@ -187,11 +193,13 @@ def main():
         pem_data = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.BestAvailableEncryption(b"user_password")
+            encryption_algorithm=serialization.BestAvailableEncryption(
+                (CFG.get_password("USER_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"user_password"
+            )
         )
         with open(key_path, 'wb') as f:
             f.write(pem_data)
-        print(f"   [0x1f4be] 用户私钥已加密保存：{os.path.basename(key_path)}")
+        print(f"   [OK] 用户私钥已加密保存：{os.path.basename(key_path)}")
 
         # 步骤3：生成CSR
         csr = generate_csr(
@@ -216,8 +224,8 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  [OK] 单元2+3完成！")
-    print(f"  [0x1f4c1] 密钥文件目录：keys/")
-    print(f"  [0x1f4c1] CSR文件目录：csr/")
+    print(f"  [OK] 密钥文件目录：keys/")
+    print(f"  [OK] CSR文件目录：csr/")
     print('='*60)
 
 

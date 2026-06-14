@@ -22,6 +22,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.backends import default_backend
 
+try:
+    from config import CFG
+except ImportError:
+    CFG = None
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -93,7 +98,7 @@ def save_pkcs12(p12_data, filepath):
     """
     with open(filepath, 'wb') as f:
         f.write(p12_data)
-    print(f"   [0x1f4be] PKCS#12证书已保存到：{os.path.basename(filepath)}")
+    print(f"   [OK] PKCS#12证书已保存到：{os.path.basename(filepath)}")
 
 
 # ============================================================
@@ -110,7 +115,7 @@ def load_and_verify_pkcs12(filepath, password=b"export_password"):
         load_key_and_certificates
     )
 
-    print(f"\n[0x1f4d6] [验证] 打开PKCS#12保险箱...")
+    print("\n[验证] 打开PKCS#12保险箱...")
 
     with open(filepath, 'rb') as f:
         p12_data = f.read()
@@ -179,7 +184,7 @@ def main():
         print(f"   [OK] 加载用户证书成功")
 
         # 导出为PKCS#12格式
-        print(f"   [0x1f4e6] 正在打包为PKCS#12格式（带密码保护）...")
+        print("   [正在打包为PKCS#12格式（带密码保护）...]")
 
         p12_data = export_pkcs12(
             private_key=private_key,
@@ -194,14 +199,15 @@ def main():
         save_pkcs12(p12_data, p12_path)
 
         # 验证导出的文件
-        load_and_verify_pkcs12(p12_path, password=b"p12_password_123")
+        p12_pwd = (CFG.get_password("P12_EXPORT_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"p12_password_123"
+        load_and_verify_pkcs12(p12_path, password=p12_pwd)
 
     print(f"\n{'='*60}")
     print(f"  [OK] 单元5完成！PKCS#12证书已导出。")
-    print(f"  [0x1f4c1] 导出目录：export/")
+    print(f"  [OK] 导出目录：export/")
     print(f"  ├─ user_张三.p12（密码：p12_password_123）")
     print(f"  └─ user_李四.p12（密码：p12_password_123）")
-    print(f"  [0x1f4cc] 提示：这些.p12文件可以导入到浏览器或系统中使用")
+    print(f"  [INFO] 提示：这些.p12文件可以导入到浏览器或系统中使用")
     print("=" * 60)
 
 
