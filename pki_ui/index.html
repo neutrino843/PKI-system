@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🌸 PKI证书管理系统 - 手绘版</title>
+    <link rel="stylesheet" href="css/handdrawn.css">
+</head>
+<body>
+    <!-- Toast通知容器 -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- ============================================================
+         登录页
+         ============================================================ -->
+    <div id="loginPage" class="login-page">
+        <div class="login-card">
+            <!-- 装饰涂鸦 -->
+            <svg style="position:absolute;top:-12px;right:-8px;width:48px;height:48px;opacity:0.3" viewBox="0 0 48 48">
+                <path d="M24 4 L28 16 L40 16 L30 24 L34 36 L24 28 L14 36 L18 24 L8 16 L20 16 Z" fill="#FAD5C0" stroke="#DBC8BE" stroke-width="1.5"/>
+            </svg>
+            <div class="logo-area">
+                <!-- 手绘锁图标 -->
+                <svg viewBox="0 0 64 64" fill="none">
+                    <rect x="16" y="28" width="32" height="28" rx="6" stroke="#D4C5F9" stroke-width="2.5" fill="rgba(212,197,249,0.2)"/>
+                    <path d="M22 28 V18 A10 10 0 0 1 42 18 V28" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+                    <circle cx="32" cy="42" r="4" fill="#D4C5F9"/>
+                    <path d="M32 46 V50" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M8 8 L16 4 L12 12" stroke="#F4B8C8" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                    <path d="M56 12 L52 8 L58 16" stroke="#B5E6D0" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                    <circle cx="52" cy="52" r="3" fill="rgba(244,184,200,0.3)"/>
+                    <circle cx="10" cy="50" r="2" fill="rgba(181,230,208,0.3)"/>
+                </svg>
+                <h1>PKI 证书管家</h1>
+                <p>✎ 安全 · 可靠 · 萌萌哒</p>
+            </div>
+            <form id="loginForm">
+                <div id="loginError" class="login-error"></div>
+                <div class="form-group">
+                    <label class="hand-label">👤 用户名</label>
+                    <input id="loginUsername" class="hand-input" type="text" placeholder="输入用户名..." required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">🔒 密码</label>
+                    <input id="loginPassword" class="hand-input" type="password" placeholder="输入密码..." required autocomplete="current-password">
+                </div>
+                <div class="login-actions">
+                    <button type="submit" class="hand-btn hand-btn-primary hand-btn-lg">✎ 登录系统</button>
+                </div>
+            </form>
+            <div class="demo-info">
+                <strong>📌 演示账号：</strong><br>
+                管理员：admin / admin123<br>
+                RA审核员：ra_zhang / ra123456<br>
+                审计员：auditor_li / audit123<br>
+                普通用户：user_wang / user1234
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         应用主容器
+         ============================================================ -->
+    <div id="appContainer" style="display:none">
+
+        <!-- === 顶部导航 === -->
+        <nav class="top-nav">
+            <button id="menuBtn" class="menu-btn" aria-label="菜单">
+                <span></span><span></span><span></span>
+            </button>
+            <div style="font-family:var(--font-hand);font-size:1rem;color:var(--color-text);display:flex;align-items:center;gap:6px">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="5" y="9" width="14" height="12" rx="3" stroke="#D4C5F9" stroke-width="2"/><path d="M8 9V6a4 4 0 0 1 8 0v3" stroke="#D4C5F9" stroke-width="2" stroke-linecap="round"/></svg>
+                <span>PKI 证书管家</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+                <span id="userName" style="font-size:0.85rem;font-family:var(--font-hand);color:var(--color-text)"></span>
+                <span id="userRole" style="font-size:0.75rem;color:var(--color-text-light);background:rgba(244,184,200,0.15);padding:2px 10px;border-radius:10px;border:1px solid var(--color-border-light)"></span>
+            </div>
+        </nav>
+
+        <!-- === 手绘侧边菜单（撕边纸张效果） === -->
+        <div id="menuOverlay" class="menu-overlay"></div>
+        <aside id="sideMenu" class="side-menu">
+            <div class="menu-header">
+                <h3>🌸 功能菜单</h3>
+                <p id="menuUserInfo">欢迎回来~</p>
+            </div>
+            <a class="menu-item" data-page="home" onclick="navigateTo('home')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12 L12 3 L21 12"/><path d="M5 10 V20 H19 V10"/></svg>
+                <span>首页</span>
+            </a>
+            <a class="menu-item" data-page="certs" onclick="navigateTo('certs');renderCertificates()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 8 H15"/><path d="M9 12 H15"/><path d="M9 16 H12"/></svg>
+                <span>证书管理</span>
+                <span class="menu-label">申请/查看</span>
+            </a>
+            <a class="menu-item" data-page="ra" onclick="navigateTo('ra');renderRARequests()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2 L2 7 L12 12 L22 7 Z"/><path d="M2 17 L12 22 L22 17"/><path d="M2 12 L12 17 L22 12"/></svg>
+                <span>RA审核</span>
+                <span class="menu-label">受理/审批</span>
+            </a>
+            <a class="menu-item" data-page="crl" onclick="navigateTo('crl');renderRevokedList()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 3 H20"/><path d="M10 7 H20"/><path d="M10 11 H20"/><path d="M4 3 H6"/><path d="M4 7 H6"/><path d="M4 11 H6"/><path d="M10 15 L14 19"/><path d="M18 21 L14 19 L18 17"/></svg>
+                <span>证书吊销</span>
+                <span class="menu-label">CRL管理</span>
+            </a>
+            <a class="menu-item" data-page="audit" onclick="navigateTo('audit');renderAuditLogs()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4 H20 V20 H4 Z"/><path d="M8 8 H16"/><path d="M8 12 H14"/><path d="M8 16 H12"/></svg>
+                <span>审计日志</span>
+                <span class="menu-label">追踪溯源</span>
+            </a>
+            <a class="menu-item" data-page="backup" onclick="navigateTo('backup');renderBackups()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 11 H5"/><path d="M12 4 V16"/><path d="M8 12 L12 16 L16 12"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="12" r="2"/></svg>
+                <span>备份管理</span>
+                <span class="menu-label">数据保护</span>
+            </a>
+            <a class="menu-item" id="logoutBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21 H5 A2 2 0 0 1 3 19 V5 A2 2 0 0 1 5 3 H9"/><path d="M16 17 L21 12 L16 7"/><path d="M21 12 H9"/></svg>
+                <span>退出登录</span>
+            </a>
+        </aside>
+
+        <!-- ============================================================
+             首页
+             ============================================================ -->
+        <main id="page-home" class="page active">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>🌸 首页</h1>
+                        <div class="subtitle">今天也是元气满满的一天呢~</div>
+                    </div>
+                    <div style="font-family:var(--font-hand);font-size:0.9rem;color:var(--color-text-light);background:var(--color-bg-card);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:8px 16px;box-shadow:var(--shadow-hand)">
+                        🗓️ <span id="todayDate"></span>
+                    </div>
+                </div>
+
+                <!-- 统计卡片 -->
+                <div class="stats-row" id="homeStats">
+                    <div class="stat-card"><div class="stat-number" id="statCerts">0</div><div class="stat-label">📜 总证书数</div></div>
+                    <div class="stat-card"><div class="stat-number" id="statValid">0</div><div class="stat-label">✅ 有效证书</div></div>
+                    <div class="stat-card"><div class="stat-number" id="statExpiring">0</div><div class="stat-label">⚠️ 即将到期</div></div>
+                    <div class="stat-card"><div class="stat-number" id="statRevoked">0</div><div class="stat-label">🔒 已吊销</div></div>
+                </div>
+
+                <!-- 功能磁贴 -->
+                <div class="home-grid">
+                    <a class="func-tile tile-pink" onclick="navigateTo('certs');renderCertificates()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <rect x="12" y="8" width="40" height="48" rx="6" stroke="#F4B8C8" stroke-width="2.5" fill="rgba(244,184,200,0.15)"/>
+                            <path d="M22 22 H42" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M22 32 H38" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M22 42 H34" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
+                            <circle cx="48" cy="48" r="10" fill="rgba(212,197,249,0.3)" stroke="#D4C5F9" stroke-width="2"/>
+                            <path d="M45 48 L48 51 L53 45" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="tile-label">📜 证书管理</span>
+                    </a>
+                    <a class="func-tile tile-green" onclick="navigateTo('ra');renderRARequests()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <path d="M32 8 L12 24 L20 48 L44 48 L52 24 Z" stroke="#B5E6D0" stroke-width="2.5" fill="rgba(181,230,208,0.15)"/>
+                            <circle cx="32" cy="30" r="8" stroke="#B5E6D0" stroke-width="2.5" fill="rgba(181,230,208,0.15)"/>
+                            <path d="M32 22 V30 L38 34" stroke="#B5E6D0" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M24 52 L32 48 L40 52" stroke="#B5E6D0" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        <span class="tile-label">✅ RA审核</span>
+                    </a>
+                    <a class="func-tile tile-peach" onclick="navigateTo('crl');renderRevokedList()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <rect x="16" y="12" width="32" height="40" rx="4" stroke="#FAD5C0" stroke-width="2.5" fill="rgba(250,213,192,0.15)"/>
+                            <path d="M22 20 H42" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M22 28 H42" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M22 36 L30 44 L42 36" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="tile-label">🔒 证书吊销</span>
+                    </a>
+                    <a class="func-tile tile-purple" onclick="navigateTo('audit');renderAuditLogs()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <rect x="12" y="8" width="40" height="48" rx="4" stroke="#D4C5F9" stroke-width="2.5" fill="rgba(212,197,249,0.15)"/>
+                            <path d="M20 18 H44" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M20 28 H40" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M20 38 H36" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round"/>
+                            <circle cx="46" cy="46" r="10" fill="rgba(244,184,200,0.2)" stroke="#F4B8C8" stroke-width="2"/>
+                            <path d="M46 42 V50" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M42 46 H50" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                        <span class="tile-label">📝 审计日志</span>
+                    </a>
+                    <a class="func-tile tile-blue" onclick="navigateTo('backup');renderBackups()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <circle cx="32" cy="32" r="22" stroke="#C5E1F5" stroke-width="2.5" fill="rgba(197,225,245,0.15)"/>
+                            <path d="M32 18 V32 L42 38" stroke="#C5E1F5" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M20 48 L28 40" stroke="#C5E1F5" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M44 48 L36 40" stroke="#C5E1F5" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        <span class="tile-label">💾 备份管理</span>
+                    </a>
+                    <a class="func-tile tile-pink" onclick="UI.toast('🔧 功能开发中，敬请期待~','info')">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <circle cx="32" cy="32" r="20" stroke="#DBC8BE" stroke-width="2.5" fill="rgba(219,200,190,0.1)"/>
+                            <path d="M32 22 V32 L40 36" stroke="#DBC8BE" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M12 12 L22 22" stroke="#DBC8BE" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M52 12 L42 22" stroke="#DBC8BE" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        <span class="tile-label">⚙️ 系统设置</span>
+                    </a>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             证书管理页
+             ============================================================ -->
+        <main id="page-certs" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>📜 证书管理</h1>
+                        <div class="subtitle">查看和管理所有数字证书</div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="hand-btn hand-btn-sm hand-btn-primary" onclick="UI.showModal('cert-apply')">✎ 申请证书</button>
+                    </div>
+                </div>
+
+                <div class="hand-card">
+                    <div class="list-toolbar">
+                        <div class="search-box">
+                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="#BFA89C" stroke-width="2.5"><circle cx="10" cy="10" r="7"/><path d="M15 15 L21 21"/></svg>
+                            <input id="certSearch" class="hand-input" type="text" placeholder="🔍 搜索证书..." style="padding-left:40px">
+                        </div>
+                        <div class="filter-group">
+                            <select id="certStatusFilter" class="hand-select" style="width:auto;min-width:120px">
+                                <option value="all">全部状态</option>
+                                <option value="有效">有效</option>
+                                <option value="即将到期">即将到期</option>
+                                <option value="已吊销">已吊销</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>编号</th><th>通用名称</th><th>组织</th><th>类型</th><th>状态</th><th>签发日期</th><th>操作</th></tr>
+                            </thead>
+                            <tbody id="certTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             RA审核页
+             ============================================================ -->
+        <main id="page-ra" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>✅ RA审核</h1>
+                        <div class="subtitle">证书申请审核（四眼原则：需双人复核）</div>
+                    </div>
+                </div>
+
+                <div class="hand-card">
+                    <div class="list-toolbar">
+                        <div class="filter-group">
+                            <select id="raFilter" class="hand-select" style="width:auto;min-width:140px">
+                                <option value="all">全部申请</option>
+                                <option value="pending">待初审</option>
+                                <option value="first_approved">待二审</option>
+                                <option value="approved">已通过</option>
+                                <option value="rejected">已拒绝</option>
+                            </select>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center;font-size:0.8rem;color:var(--color-text-light)">
+                            <span>🔄 四眼原则：初审与二审需不同审核员</span>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>申请编号</th><th>申请人</th><th>组织</th><th>提交时间</th><th>状态</th><th>当前审核</th><th>操作</th></tr>
+                            </thead>
+                            <tbody id="raTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             CRL吊销页
+             ============================================================ -->
+        <main id="page-crl" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>🔒 证书吊销 (CRL)</h1>
+                        <div class="subtitle">证书吊销与吊销列表管理</div>
+                    </div>
+                    <button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="generateCRL()">📋 生成CRL</button>
+                </div>
+
+                <div class="hand-card">
+                    <div class="section-title"><span>📋 已吊销证书列表</span></div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>序列号</th><th>通用名称</th><th>吊销时间</th><th>吊销原因</th><th>操作人</th></tr>
+                            </thead>
+                            <tbody id="revokedTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="hand-card mt-16">
+                    <div class="section-title"><span>💡 CRL说明</span></div>
+                    <div style="font-size:0.85rem;color:var(--color-text-light);line-height:1.8">
+                        <p>• CRL（证书吊销列表）记录了所有已吊销的证书信息</p>
+                        <p>• 系统支持 CRL 生成和发布，吊销原因包含：keyCompromise(密钥泄露)、CACompromise(CA泄露)、affiliationChanged(离职)、superseded(已替换) 等</p>
+                        <p>• 当前吊销列表由 HMAC-SHA256 保护完整性</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             审计日志页
+             ============================================================ -->
+        <main id="page-audit" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>📝 审计日志</h1>
+                        <div class="subtitle">全链路操作追踪，链式哈希防篡改</div>
+                    </div>
+                </div>
+
+                <div class="hand-card">
+                    <div class="list-toolbar">
+                        <div class="search-box">
+                            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="#BFA89C" stroke-width="2.5"><circle cx="10" cy="10" r="7"/><path d="M15 15 L21 21"/></svg>
+                            <input id="auditSearch" class="hand-input" type="text" placeholder="🔍 搜索用户/操作..." style="padding-left:40px">
+                        </div>
+                        <div class="filter-group">
+                            <select id="auditFilter" class="hand-select" style="width:auto;min-width:120px">
+                                <option value="all">全部操作</option>
+                                <option value="LOGIN">登录</option>
+                                <option value="ISSUE_CERT">签发证书</option>
+                                <option value="APPROVE_CSR">审核CSR</option>
+                                <option value="REVOKE">吊销</option>
+                                <option value="GEN_CRL">生成CRL</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>时间</th><th>用户</th><th>操作类型</th><th>结果</th><th>详情</th></tr>
+                            </thead>
+                            <tbody id="auditTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="hand-card mt-16">
+                    <div class="section-title"><span>🔐 审计日志完整性说明</span></div>
+                    <div style="font-size:0.85rem;color:var(--color-text-light);line-height:1.8">
+                        <p>• 每条审计日志都通过链式哈希进行完整性保护</p>
+                        <p>• 每条日志包含前一条日志的哈希值，形成"链条"</p>
+                        <p>• 任何篡改都会导致链条断裂，可被检测</p>
+                        <p>• 日志同时包含 HMAC-SHA256 签名，防止被伪造</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             备份管理页
+             ============================================================ -->
+        <main id="page-backup" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>💾 备份管理</h1>
+                        <div class="subtitle">AES-256-GCM 加密备份，数据安全无忧</div>
+                    </div>
+                    <button class="hand-btn hand-btn-sm hand-btn-primary" onclick="createBackup()">✎ 创建备份</button>
+                </div>
+
+                <div class="hand-card">
+                    <div class="list-toolbar">
+                        <div class="section-title" style="margin:0"><span>📋 备份历史</span></div>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>文件名</th><th>大小</th><th>创建时间</th><th>类型</th><th>状态</th></tr>
+                            </thead>
+                            <tbody id="backupTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="hand-card mt-16">
+                    <div class="section-title"><span>🔐 备份加密说明</span></div>
+                    <div style="font-size:0.85rem;color:var(--color-text-light);line-height:1.8">
+                        <p>• 备份使用 AES-256-GCM 认证加密算法</p>
+                        <p>• GCM 模式同时提供加密和完整性验证</p>
+                        <p>• 加密密钥通过环境变量 PKI_BACKUP_KEY 配置</p>
+                        <p>• 支持从加密备份中解密恢复</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+             模态框 - 证书申请
+             ============================================================ -->
+        <div id="modal-cert-apply" class="modal-overlay">
+            <div class="modal-box">
+                <div class="modal-header">
+                    <h2>✎ 申请新证书</h2>
+                    <button class="modal-close" onclick="UI.hideModal('cert-apply')">✕</button>
+                </div>
+                <form id="certApplyForm">
+                    <div class="form-group">
+                        <label class="hand-label">👤 通用名称 (CN)</label>
+                        <input id="applyCN" class="hand-input" type="text" placeholder="例如：张三" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="hand-label">🏢 所属组织 (O)</label>
+                        <input id="applyOrg" class="hand-input" type="text" placeholder="例如：技术部" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="hand-label">📌 证书类型</label>
+                        <select class="hand-select">
+                            <option>用户证书</option>
+                            <option>服务器证书</option>
+                        </select>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="hand-btn" onclick="UI.hideModal('cert-apply')">取消</button>
+                        <button type="submit" class="hand-btn hand-btn-primary">✎ 提交申请</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             模态框 - 证书详情
+             ============================================================ -->
+        <div id="modal-cert" class="modal-overlay">
+            <div class="modal-box">
+                <div class="modal-header">
+                    <h2>📜 证书详情</h2>
+                    <button class="modal-close" onclick="UI.hideModal('cert')">✕</button>
+                </div>
+                <div id="modalCertBody"></div>
+            </div>
+        </div>
+
+        <!-- ============================================================
+             模态框 - 证书吊销
+             ============================================================ -->
+        <div id="modal-cert-revoke" class="modal-overlay">
+            <div class="modal-box">
+                <div class="modal-header">
+                    <h2>🔒 吊销证书</h2>
+                    <button class="modal-close" onclick="UI.hideModal('cert-revoke')">✕</button>
+                </div>
+                <form id="revokeForm">
+                    <input type="hidden" id="revokeCertId">
+                    <div class="form-group">
+                        <label class="hand-label">👤 证书持有人</label>
+                        <input id="revokeCn" class="hand-input" type="text" disabled style="opacity:0.7">
+                    </div>
+                    <div class="form-group">
+                        <label class="hand-label">🔢 序列号</label>
+                        <input id="revokeSerial" class="hand-input" type="text" disabled style="opacity:0.7">
+                    </div>
+                    <div class="form-group">
+                        <label class="hand-label">📌 吊销原因</label>
+                        <select id="revokeReason" class="hand-select">
+                            <option value="keyCompromise">密钥泄露 (keyCompromise)</option>
+                            <option value="CACompromise">CA泄露 (CACompromise)</option>
+                            <option value="affiliationChanged">人员离职 (affiliationChanged)</option>
+                            <option value="superseded">已被替换 (superseded)</option>
+                            <option value="cessationOfOperation">停止运营 (cessationOfOperation)</option>
+                        </select>
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--color-text-light);padding:12px;background:rgba(244,184,184,0.1);border-radius:var(--radius-sm);margin-bottom:16px">
+                        ⚠️ 吊销操作不可撤销，请确认。
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="hand-btn" onclick="UI.hideModal('cert-revoke')">取消</button>
+                        <button type="submit" class="hand-btn hand-btn-danger">🔒 确认吊销</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    </div><!-- /appContainer -->
+
+    <script src="js/app.js"></script>
+    <script>
+        // 首页日期显示
+        document.getElementById('todayDate').textContent = new Date().toLocaleDateString('zh-CN', {
+            year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
+        });
+        // 页面加载后渲染首页
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                if (PKI_DATA.currentUser) renderHome();
+            }, 100);
+        });
+    </script>
+</body>
+</html>
