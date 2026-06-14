@@ -155,7 +155,7 @@ async function showCertDetail(serial) {
                 <span class="detail-label">当前状态</span><span class="detail-value"><span class="hand-badge ${cert.status === '有效' ? 'hand-badge-success' : cert.status === '即将到期' ? 'hand-badge-warning' : 'hand-badge-danger'}">${cert.status}</span></span>
             </div>`;
         document.getElementById('modalCertBody').innerHTML = html;
-        UI.showModal('modal-cert');
+        UI.showModal('cert');
     } catch (err) {
         UI.toast('加载证书详情失败: ' + err.message, 'error');
     }
