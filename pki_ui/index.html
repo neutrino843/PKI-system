@@ -503,17 +503,12 @@
 
     </div><!-- /appContainer -->
 
+    <script src="js/api.js"></script>
     <script src="js/app.js"></script>
     <script>
         // 首页日期显示
         document.getElementById('todayDate').textContent = new Date().toLocaleDateString('zh-CN', {
             year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
-        });
-        // 页面加载后渲染首页
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(function() {
-                if (PKI_DATA.currentUser) renderHome();
-            }, 100);
         });
     </script>
 </body>
