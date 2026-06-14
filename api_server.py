@@ -769,15 +769,16 @@ def serve_index():
     return send_from_directory(str(BASE_DIR / "pki_ui"), "index.html")
 
 
-@app.route("/<path:path>")
+@app.route("/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 def serve_static(path):
+    # API路径直接404（应已被上方API路由匹配）
+    if path.startswith("api/"):
+        return jsonify({"error": "API route not found"}), 404
     file_path = BASE_DIR / "pki_ui" / path
-    if file_path.exists():
+    if file_path.exists() and file_path.is_file():
         return send_from_directory(str(BASE_DIR / "pki_ui"), path)
-    # 如果是SPA路由，返回index.html
-    if not path.startswith("api/"):
-        return send_from_directory(str(BASE_DIR / "pki_ui"), "index.html")
-    return jsonify({"error": "Not found"}), 404
+    # SPA路由：返回index.html
+    return send_from_directory(str(BASE_DIR / "pki_ui"), "index.html")
 
 
 # ============================================================
