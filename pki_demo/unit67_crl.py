@@ -28,6 +28,8 @@ from cryptography.x509.oid import NameOID, ExtensionOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
+from security_crypto import get_hash_algorithm
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # CRL数据文件路径
@@ -208,7 +210,7 @@ def generate_crl(crl_filepath=None):
     # 用CA私钥签名CRL
     crl = crl_builder.sign(
         private_key=ca_key,
-        algorithm=hashes.SHA256(),
+        algorithm=get_hash_algorithm(),
         backend=default_backend()
     )
 

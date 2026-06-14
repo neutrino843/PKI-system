@@ -724,7 +724,7 @@ def _generate_crl():
         critical=False,
     )
 
-    crl = crl_builder.sign(ca_key, hashes.SHA256(), default_backend())
+    crl = crl_builder.sign(ca_key, get_hash_algorithm(), default_backend())
 
     crl_path = BASE_DIR / "crl" / "ca_crl.pem"
     with open(crl_path, "wb") as f:

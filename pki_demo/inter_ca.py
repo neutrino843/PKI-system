@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 from config import CFG
+from security_crypto import get_hash_algorithm, get_rsa_key_size
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -83,7 +84,7 @@ def generate_intermediate_ca():
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(ca_key, hashes.SHA256(), default_backend())
+        .sign(ca_key, get_hash_algorithm(), default_backend())
     )
 
     with open(inter_cert_path, "wb") as f:

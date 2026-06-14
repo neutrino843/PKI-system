@@ -25,6 +25,7 @@ HASH_ALGORITHM_MAP = {
     "SHA256": hashes.SHA256(),
     "SHA384": hashes.SHA384(),
     "SHA512": hashes.SHA512(),
+    "SM3": hashes.SM3(),
 }
 
 ALLOWED_RSA_KEY_SIZES = [2048, 3072, 4096]

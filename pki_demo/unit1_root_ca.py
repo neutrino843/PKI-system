@@ -24,6 +24,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
+from security_crypto import get_hash_algorithm
+
 
 # ============================================================
 # 配置区（你可以在这里修改参数）
@@ -213,7 +215,7 @@ def generate_root_ca_certificate(private_key, subject_name=CA_NAME,
             critical=True,
         )
         # 用私钥签名——相当于在证书上"盖钢印"
-        .sign(private_key, hashes.SHA256(), default_backend())
+        .sign(private_key, get_hash_algorithm(), default_backend())
     )
 
     print(f"   [OK] 根CA自签证书签发成功！")

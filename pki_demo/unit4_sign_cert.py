@@ -25,6 +25,8 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
+from security_crypto import get_hash_algorithm
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -168,7 +170,7 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
     # CA用私钥签名——"盖钢印"
     user_cert = cert_builder.sign(
         ca_private_key,
-        hashes.SHA256(),
+        get_hash_algorithm(),
         default_backend()
     )
 
