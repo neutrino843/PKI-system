@@ -224,6 +224,15 @@ class UserManager:
             with open(USERS_FILE, "w", encoding="utf-8") as f:
                 json.dump(default_users, f, ensure_ascii=False, indent=2)
 
+    def _atomic_save_users(self, users_data):
+        """原子写入用户数据：先写临时文件再重命名，防止写入中断数据损坏"""
+        tmp_path = str(USERS_FILE) + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(users_data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(USERS_FILE))
+
     def _hash_password(self, password):
         """
         密码哈希（使用PBKDF2-HMAC-SHA256 + 随机盐）
@@ -326,8 +335,7 @@ class UserManager:
             "is_active": True,
         }
 
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=2)
+        self._atomic_save_users(users)
         return True
 
     def deactivate_user(self, username):
@@ -340,9 +348,30 @@ class UserManager:
 
         users[username]["is_active"] = False
 
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=2)
+        self._atomic_save_users(users)
         return True
+
+    def update_user_role(self, username, new_role):
+        """更新用户角色（仅CA管理员操作）"""
+        valid_roles = {"ca_admin", "ra_operator", "auditor", "end_user"}
+        if new_role not in valid_roles:
+            return False, f"无效角色: {new_role}"
+
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            users = json.load(f)
+
+        if username not in users:
+            return False, f"用户不存在: {username}"
+
+        if username == "admin":
+            return False, "不能修改admin账号的角色"
+
+        old_role = users[username]["role"]
+        users[username]["role"] = new_role
+        users[username]["updated_at"] = datetime.now().isoformat()
+
+        self._atomic_save_users(users)
+        return True, f"用户{username}角色已从{old_role}变更为{new_role}"
 
 
 # ============================================================

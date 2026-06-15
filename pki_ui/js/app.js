@@ -94,6 +94,48 @@ function updateUserInfo() {
         document.getElementById('userName').textContent = currentUser.name;
         document.getElementById('userRole').textContent = currentUser.roleName;
         document.getElementById('menuUserInfo').textContent = `${currentUser.name} - ${currentUser.roleName}`;
+        // 管理菜单：仅admin可见
+        const menuUsers = document.getElementById('menuUsers');
+        if (menuUsers) {
+            menuUsers.style.display = currentUser.role === 'ca_admin' ? 'flex' : 'none';
+        }
+    }
+}
+
+/* ----- 注册 ----- */
+function showRegisterForm() {
+    document.getElementById('loginCard').style.display = 'none';
+    document.getElementById('registerCard').style.display = 'block';
+}
+function hideRegisterForm() {
+    document.getElementById('registerCard').style.display = 'none';
+    document.getElementById('loginCard').style.display = 'block';
+    document.getElementById('registerError').classList.remove('show');
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const username = document.getElementById('regUsername').value.trim();
+    const name = document.getElementById('regName').value.trim();
+    const password = document.getElementById('regPassword').value;
+    const password2 = document.getElementById('regPassword2').value;
+    const errorEl = document.getElementById('registerError');
+
+    if (password !== password2) {
+        errorEl.textContent = '两次密码输入不一致';
+        errorEl.classList.add('show');
+        return;
+    }
+
+    try {
+        const resp = await API.register(username, password, name);
+        UI.toast('注册成功，请登录', 'success');
+        // 自动填充用户名
+        document.getElementById('loginUsername').value = username;
+        hideRegisterForm();
+    } catch (err) {
+        errorEl.textContent = err.message || '注册失败';
+        errorEl.classList.add('show');
     }
 }
 
@@ -175,6 +217,7 @@ async function handleCertApply(e) {
         document.getElementById('applyOrg').value = '';
         UI.toast('申请已提交：' + resp.csrId, 'success');
         if (document.getElementById('page-ra').classList.contains('active')) renderRARequests();
+        renderMyApplications();
         renderHome();
     } catch (err) {
         UI.toast('申请失败: ' + err.message, 'error');
@@ -327,11 +370,94 @@ async function renderAuditLogs() {
             </tr>
         `).join('');
     } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+/* ----- 我的申请记录 ----- */
+async function renderMyApplications() {
+    const tbody = document.getElementById('myAppTableBody');
+    if (!tbody) return;
+    try {
+        const apps = await API.getMyApplications();
+        if (apps.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>暂无申请记录</p></div></td></tr>`;
+            return;
+        }
+        tbody.innerHTML = apps.map(a => {
+            let badgeClass = 'hand-badge-warning';
+            if (a.status === 'issued') badgeClass = 'hand-badge-success';
+            else if (a.status === 'approved') badgeClass = 'hand-badge-info';
+            else if (a.status === 'rejected') badgeClass = 'hand-badge-danger';
+            return `<tr>
+                <td style="font-size:0.85rem">${a.id}</td>
+                <td>${a.cn}</td>
+                <td>${a.org}</td>
+                <td style="font-size:0.85rem">${a.submittedAt}</td>
+                <td><span class="hand-badge ${badgeClass}">${a.statusText}</span></td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
         tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
     }
 }
 
-/* ----- 备份管理 ----- */
+/* ----- 用户管理（仅admin可见） ----- */
+async function renderUserManagement() {
+    const tbody = document.getElementById('userTableBody');
+    if (!tbody) return;
+    try {
+        const users = await API.getUsers();
+        const roleMap = { 'ca_admin': 'CA管理员', 'ra_operator': '权限审核员', 'auditor': '审计员', 'end_user': '普通用户' };
+        tbody.innerHTML = users.map(u => {
+            if (u.id === 'admin') return ''; // 不显示admin自己
+            const isEndUser = u.role === 'end_user';
+            const isReviewer = u.role === 'ra_operator';
+            return `<tr>
+                <td>${u.id}</td>
+                <td>${u.name}</td>
+                <td><span class="hand-badge ${isReviewer ? 'hand-badge-info' : isEndUser ? 'hand-badge' : 'hand-badge-success'}">${roleMap[u.role] || u.role}</span></td>
+                <td><span class="hand-badge hand-badge-success">${u.isActive ? '正常' : '已停用'}</span></td>
+                <td>
+                    ${isEndUser ? `<button class="hand-btn hand-btn-sm hand-btn-primary" onclick="promoteReviewer('${u.id}')">提升为审核员</button>` : ''}
+                    ${isReviewer ? `<button class="hand-btn hand-btn-sm hand-btn-warning" onclick="demoteUser('${u.id}')">降级为用户</button>` : ''}
+                    <span style="font-size:0.8rem;color:var(--color-text-light)">${u.role === 'auditor' ? '审计员' : u.role === 'ca_admin' ? '管理员' : ''}</span>
+                </td>
+            </tr>`;
+        }).join('');
+        // 清理空行
+        tbody.innerHTML = tbody.innerHTML.replace(/<tr><\/tr>/g, '');
+        if (!tbody.innerHTML.trim()) {
+            tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>暂无其他用户</p></div></td></tr>`;
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+async function promoteReviewer(username) {
+    if (!confirm(`确认将用户 "${username}" 提升为权限审核员？`)) return;
+    try {
+        const resp = await API.promoteReviewer(username);
+        UI.toast(resp.message, 'success');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message, 'error');
+    }
+}
+
+async function demoteUser(username) {
+    if (!confirm(`确认将用户 "${username}" 降级为普通用户？`)) return;
+    try {
+        const resp = await API.demoteUser(username);
+        UI.toast(resp.message, 'warning');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message, 'error');
+    }
+}
+
+/* ----- 证书申请 ----- */
 async function renderBackups() {
     const tbody = document.getElementById('backupTableBody');
     try {
@@ -394,6 +520,8 @@ document.addEventListener('keydown', function(e) {
 // ============================================================
 document.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('loginPage').style.display = 'flex';
+    document.getElementById('loginCard').style.display = 'block';
+    document.getElementById('registerCard').style.display = 'none';
     document.getElementById('appContainer').style.display = 'none';
 
     // 日期
@@ -403,6 +531,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 事件绑定
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
+    document.getElementById('registerForm').addEventListener('submit', handleRegister);
     document.getElementById('menuBtn').addEventListener('click', () => {
         document.getElementById('sideMenu').classList.contains('open') ? closeMenu() : openMenu();
     });

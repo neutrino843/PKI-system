@@ -32,6 +32,15 @@ const API = {
     getUsers() {
         return API.request('GET', '/api/auth/users');
     },
+    register(username, password, name) {
+        return API.request('POST', '/api/auth/register', { username, password, name });
+    },
+    promoteReviewer(username) {
+        return API.request('POST', '/api/auth/promote-reviewer', { username });
+    },
+    demoteUser(username) {
+        return API.request('POST', '/api/auth/demote-user', { username });
+    },
 
     // --- 仪表盘 ---
     getStats() {
@@ -66,6 +75,9 @@ const API = {
     },
     rejectCsr(csrId, reason = '') {
         return API.request('POST', '/api/csr/reject', { csrId, reason });
+    },
+    getMyApplications() {
+        return API.request('GET', '/api/csr/my-applications');
     },
 
     // --- CRL/吊销 ---

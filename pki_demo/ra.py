@@ -78,9 +78,13 @@ class RAManager:
         return []
 
     def _save_pending(self, pending_list):
-        """保存待审核列表"""
-        with open(PENDING_FILE, "w", encoding="utf-8") as f:
+        """原子写入待审核列表"""
+        tmp_path = str(PENDING_FILE) + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(pending_list, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(PENDING_FILE))
 
     def _load_approved(self):
         """加载已批准列表"""
@@ -90,9 +94,13 @@ class RAManager:
         return []
 
     def _save_approved(self, approved_list):
-        """保存已批准列表"""
-        with open(APPROVED_FILE, "w", encoding="utf-8") as f:
+        """原子写入已批准列表"""
+        tmp_path = str(APPROVED_FILE) + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(approved_list, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(APPROVED_FILE))
 
     def submit_csr(self, csr_id, username, org, csr_filepath, applicant="unknown"):
         """

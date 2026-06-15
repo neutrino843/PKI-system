@@ -5,6 +5,8 @@ PKI系统 - REST API 后端服务
 import os
 import sys
 import json
+import hashlib
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -41,6 +43,26 @@ CORS(app, supports_credentials=True)
 # 辅助函数
 # ============================================================
 
+# 中国时区偏移：UTC+8
+LOCAL_TZ = timezone(timedelta(hours=8))
+
+def to_local_time(utc_iso_str):
+    """将UTC ISO时间字符串转换为北京时间（UTC+8）"""
+    if not utc_iso_str:
+        return ""
+    try:
+        # 去除末尾的Z
+        s = utc_iso_str.replace("Z", "")
+        if "+" in utc_iso_str or (len(utc_iso_str) > 19 and utc_iso_str[19] == "+"):
+            # 已经是带时区的时间
+            dt = datetime.fromisoformat(utc_iso_str)
+        else:
+            dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone(LOCAL_TZ)
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except:
+        return utc_iso_str[:19]
+
 def require_permission_api(perm):
     """API层权限校验装饰器"""
     def decorator(f):
@@ -54,6 +76,40 @@ def require_permission_api(perm):
         wrapper.__name__ = f.__name__
         return wrapper
     return decorator
+
+# 安全加固：输入校验常量
+MAX_INPUT_LENGTH = 200       # 普通文本最大长度
+MAX_NAME_LENGTH = 50         # 用户名/显示名称最大长度
+MAX_PASSWORD_LENGTH = 128    # 密码最大长度
+MAX_ORG_LENGTH = 100         # 组织名最大长度
+ALLOWED_USERNAME_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
+
+def sanitize_string(value, max_len=MAX_INPUT_LENGTH):
+    """安全字符串处理：去除首尾空格、控制字符、超长截断"""
+    if not value or not isinstance(value, str):
+        return ""
+    value = value.strip()
+    # 移除控制字符（除了空格）
+    value = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', value)
+    return value[:max_len]
+
+def validate_safe_path(path_str):
+    """防止路径遍历攻击：禁止包含 ../ 或绝对路径"""
+    normalized = os.path.normpath(path_str).replace("\\", "/")
+    if ".." in normalized.split("/"):
+        return False
+    if path_str.startswith("/") or (len(path_str) > 1 and path_str[1] == ":"):
+        return False
+    return True
+
+def atomic_write_json(filepath, data):
+    """原子写入JSON文件：先写临时文件再重命名，防止写入中断导致数据损坏"""
+    tmp_path = str(filepath) + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, str(filepath))
 
 def get_current_user():
     return auth_sm.get_current_user()
@@ -133,10 +189,14 @@ def get_cert_list():
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
     data = request.get_json()
-    username = data.get("username", "").strip()
+    if not data:
+        return jsonify({"error": "请求数据不能为空"}), 400
+    username = sanitize_string(data.get("username", ""), MAX_NAME_LENGTH)
     password = data.get("password", "").strip()
     if not username or not password:
         return jsonify({"error": "用户名和密码不能为空"}), 400
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return jsonify({"error": "密码长度超限"}), 400
 
     success, msg = auth_sm.login(username, password)
     if success:
@@ -208,6 +268,90 @@ def api_users():
     return jsonify(result)
 
 
+@app.route("/api/auth/register", methods=["POST"])
+def api_register():
+    """用户注册（仅允许注册 end_user 角色）"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "请求数据不能为空"}), 400
+    username = sanitize_string(data.get("username", ""), MAX_NAME_LENGTH)
+    password = data.get("password", "").strip()
+    name = sanitize_string(data.get("name", ""), MAX_NAME_LENGTH)
+
+    if not username or not password or not name:
+        return jsonify({"error": "用户名、密码和显示名称不能为空"}), 400
+    if len(username) < 3 or len(username) > MAX_NAME_LENGTH:
+        return jsonify({"error": "用户名长度需在3-50个字符之间"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "密码长度至少6位"}), 400
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return jsonify({"error": "密码长度不能超过128位"}), 400
+    if len(name) < 1 or len(name) > MAX_NAME_LENGTH:
+        return jsonify({"error": "显示名称长度超限"}), 400
+    # 用户名只允许字母数字和下划线
+    if not ALLOWED_USERNAME_PATTERN.match(username):
+        return jsonify({"error": "用户名只能包含字母、数字和下划线"}), 400
+
+    um = UserManager()
+    success = um.add_user(username, password, name, "end_user")
+    if success:
+        audit_logger.log("USER_CREATE", get_current_username() if get_current_user() else "anonymous",
+                         "CREATE", username, "SUCCESS", f"注册新用户:{name}({username})", "end_user")
+        return jsonify({"message": "注册成功，请登录", "username": username})
+    else:
+        return jsonify({"error": "用户名已存在"}), 409
+
+
+@app.route("/api/auth/promote-reviewer", methods=["POST"])
+def api_promote_reviewer():
+    """管理员将普通用户提升为权限审核员"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return jsonify({"error": str(e)}), 403
+
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    if not username:
+        return jsonify({"error": "用户名不能为空"}), 400
+    if username == get_current_username():
+        return jsonify({"error": "不能操作自己的账号"}), 400
+
+    um = UserManager()
+    success, msg = um.update_user_role(username, "ra_operator")
+    if success:
+        audit_logger.log("ROLE_CHANGE", get_current_username(), "UPDATE",
+                         username, "SUCCESS",
+                         f"将用户{username}提升为权限审核员", get_current_role())
+        return jsonify({"message": msg})
+    return jsonify({"error": msg}), 400
+
+
+@app.route("/api/auth/demote-user", methods=["POST"])
+def api_demote_user():
+    """管理员将审核员降级为普通用户"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return jsonify({"error": str(e)}), 403
+
+    data = request.get_json()
+    username = data.get("username", "").strip()
+    if not username:
+        return jsonify({"error": "用户名不能为空"}), 400
+    if username == get_current_username():
+        return jsonify({"error": "不能操作自己的账号"}), 400
+
+    um = UserManager()
+    success, msg = um.update_user_role(username, "end_user")
+    if success:
+        audit_logger.log("ROLE_CHANGE", get_current_username(), "UPDATE",
+                         username, "SUCCESS",
+                         f"将用户{username}降级为普通用户", get_current_role())
+        return jsonify({"message": msg})
+    return jsonify({"error": msg}), 400
+
+
 # ============================================================
 # API - 仪表盘统计
 # ============================================================
@@ -253,6 +397,13 @@ def api_stats():
 @app.route("/api/certificates", methods=["GET"])
 def api_certificates():
     certs = get_cert_list()
+    user = get_current_user()
+    role = user.get("role", "end_user") if user else "end_user"
+
+    # 权限隔离：只有审核员和管理员可查看全部证书
+    if role not in ("ra_operator", "ca_admin"):
+        return jsonify([])
+
     # 过滤：只返回用户证书
     status_filter = request.args.get("status", "all")
     search = request.args.get("search", "").lower()
@@ -283,13 +434,25 @@ def api_certificate_detail(serial):
 
 @app.route("/api/csr/apply", methods=["POST"])
 def api_csr_apply():
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "未登录"}), 401
+
     data = request.get_json()
-    cn = data.get("cn", "").strip()
-    org = data.get("org", "").strip()
-    if not cn or not org:
-        return jsonify({"error": "通用名称和所属组织不能为空"}), 400
+    if not data:
+        return jsonify({"error": "请求数据不能为空"}), 400
+    cn = sanitize_string(data.get("cn", ""), MAX_NAME_LENGTH)
+    org = sanitize_string(data.get("org", ""), MAX_ORG_LENGTH)
+    if not cn:
+        return jsonify({"error": "通用名称不能为空"}), 400
+    if not org:
+        return jsonify({"error": "所属组织不能为空"}), 400
 
     try:
+        # 生成安全文件名（使用时间戳+哈希，避免中文等特殊字符导致文件写入失败）
+        safe_tag = hashlib.sha256(cn.encode('utf-8')).hexdigest()[:12]
+        ts = datetime.now().strftime('%Y%m%d%H%M%S')
+
         # 生成密钥对
         private_key = rsa.generate_private_key(
             public_exponent=65537, key_size=get_rsa_key_size(), backend=default_backend()
@@ -298,7 +461,7 @@ def api_csr_apply():
         user_pwd = CFG.get_password("USER_KEY_PASSWORD")
         if not user_pwd:
             return jsonify({"error": "PKI_USER_KEY_PASSWORD未设置"}), 500
-        key_path = PKI_DEMO_DIR / "keys" / f"user_{cn}_private.pem"
+        key_path = PKI_DEMO_DIR / "keys" / f"user_{safe_tag}_{ts}_private.pem"
         pem_data = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -318,12 +481,12 @@ def api_csr_apply():
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .sign(private_key, get_hash_algorithm(), default_backend())
         )
-        csr_path = PKI_DEMO_DIR / "csr" / f"user_{cn}_csr.pem"
+        csr_path = PKI_DEMO_DIR / "csr" / f"user_{safe_tag}_{ts}_csr.pem"
         with open(csr_path, "wb") as f:
             f.write(csr.public_bytes(serialization.Encoding.PEM))
 
         # 提交RA
-        csr_id = f"CSR-{cn}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        csr_id = f"CSR-{safe_tag}-{ts}"
         success, msg = ra_manager.submit_csr(
             csr_id, cn, org, str(csr_path), get_current_username()
         )
@@ -341,8 +504,19 @@ def api_csr_apply():
 
 @app.route("/api/csr/pending", methods=["GET"])
 def api_csr_pending():
-    """获取待审核CSR列表"""
+    """获取待审核CSR列表（仅审核员和管理员可查看全部）"""
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "未登录"}), 401
+
+    role = user.get("role", "end_user")
     pending = ra_manager.get_pending_list()
+
+    # 权限隔离：只有审核员和管理员可看全部申请
+    if role not in ("ra_operator", "ca_admin"):
+        # 普通用户只能看自己的申请（通过 my-applications 接口）
+        return jsonify([])
+
     result = []
     for item in pending:
         status_text = "待初审"
@@ -438,6 +612,51 @@ def api_csr_approved():
     return jsonify(result)
 
 
+@app.route("/api/csr/my-applications", methods=["GET"])
+def api_csr_my_applications():
+    """获取当前用户自己的申请记录（pending + approved）"""
+    username = get_current_username()
+    if not username:
+        return jsonify({"error": "未登录"}), 401
+
+    # 从pending中查询
+    pending_list = ra_manager.get_pending_list()
+    my_pending = [item for item in pending_list if item.get("applicant") == username]
+
+    # 从approved中查询
+    approved_list = ra_manager.get_approved_list()
+    my_approved = [item for item in approved_list if item.get("applicant") == username]
+
+    result = []
+    for item in my_pending:
+        status_text = "待初审"
+        if item["status"] == "first_approved":
+            status_text = "待二审"
+        result.append({
+            "id": item["csr_id"],
+            "cn": item["username"],
+            "org": item["org"],
+            "submittedAt": item.get("submitted_at", "")[:19],
+            "status": item["status"],
+            "statusText": status_text,
+        })
+    for item in my_approved:
+        issued = item.get("issued", False)
+        status_text = "已签发" if issued else "已批准待签发"
+        result.append({
+            "id": item["csr_id"],
+            "cn": item["username"],
+            "org": item["org"],
+            "submittedAt": item.get("submitted_at", "")[:19],
+            "status": "issued" if issued else item["status"],
+            "statusText": status_text,
+        })
+
+    # 按提交时间倒序
+    result.sort(key=lambda x: x.get("submittedAt", ""), reverse=True)
+    return jsonify(result)
+
+
 @app.route("/api/certificates/issue/<csr_id>", methods=["POST"])
 def api_issue_cert(csr_id):
     try:
@@ -502,13 +721,15 @@ def _issue_single_cert(csr_id):
         .sign(ca_key, get_hash_algorithm(), default_backend())
     )
 
-    cert_path = BASE_DIR / "pki_demo/certs" / f"user_{item['username']}_cert.pem"
+    # 使用安全文件名（从CSR文件名提取标识，或使用safe_tag）
+    safe_username = hashlib.sha256(item['username'].encode('utf-8')).hexdigest()[:12]
+    cert_path = BASE_DIR / "pki_demo/certs" / f"user_{safe_username}_cert.pem"
     with open(cert_path, "wb") as f:
         f.write(user_cert.public_bytes(serialization.Encoding.PEM))
 
     ra_manager.mark_issued(item["csr_id"])
     audit_logger.log("CERT_ISSUE", get_current_username(), "CREATE",
-                     f"user_{item['username']}_cert.pem", "SUCCESS",
+                     f"user_{safe_username}_cert.pem", "SUCCESS",
                      f"为用户{item['username']}签发证书", get_current_role())
 
     return user_cert
@@ -527,7 +748,7 @@ def api_revoked():
         result.append({
             "serial": item["serial"],
             "cn": item["name"],
-            "revokedAt": item.get("revoked_at", "")[:19],
+            "revokedAt": to_local_time(item.get("revoked_at", "")),
             "reason": item.get("reason", "unspecified"),
             "reasonDesc": item.get("reason_desc", "未指定"),
             "revokedBy": item.get("revoked_by", "系统")
@@ -672,7 +893,7 @@ def api_audit():
     entries = []
     for entry in results:
         entries.append({
-            "time": entry.get("timestamp", "")[:19],
+            "time": to_local_time(entry.get("timestamp", "")),
             "user": entry.get("username", ""),
             "action": entry.get("event_type", ""),
             "resource": entry.get("resource", ""),
