@@ -1,7 +1,7 @@
 """
 中间CA签发模块 (inter_ca.py)
 功能：使用根CA签发中间CA证书，实现CA层级分离
-优化项：FIX-11（无中间CA -> 两级CA架构）
+优化：FIX-11（无中间CA -> 两级CA架构）
 """
 
 import os

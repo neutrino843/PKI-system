@@ -1,10 +1,3 @@
-"""
-备份恢复模块 (backup.py)
-功能：备份PKI系统的证书、密钥、配置数据，支持定时打包和恢复
-
-优化项：FIX-05（无数据备份 -> 自动备份）
-"""
-
 import os
 import shutil
 import tarfile
@@ -34,10 +27,6 @@ BACKUP_ITEMS = [
 def _safe_extract(tar, target_path):
     """
     安全解压tar文件，防止路径穿越攻击
-
-    旧版缺陷：直接调用 tar.extractall()，恶意tar包中的
-    ../../../etc/passwd 路径可覆盖系统文件
-    新版修复：提取前验证每个文件名的路径安全性
     """
     target_path = Path(target_path).resolve()
     for member in tar.getmembers():

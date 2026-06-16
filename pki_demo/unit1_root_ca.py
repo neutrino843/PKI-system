@@ -2,12 +2,6 @@
 ==============================================================
   单元1：根CA自签证书签发
   功能：生成根CA的密钥对，并签发根CA自签名证书
-  （相当于"发证总局"给自己颁发"总局成立证书"）
-
-  通俗解释：
-  - 密钥对 = 一对配对的密码（公钥=锁，私钥=钥匙）
-  - 自签证书 = 自己给自己发证，自己是信任的起点
-  - 根CA = 整个PKI体系的"最高发证机关"
 ==============================================================
 """
 
@@ -45,10 +39,6 @@ def generate_key_pair(key_size=KEY_SIZE):
     """
     生成RSA密钥对（即一对配对的密码）
 
-    通俗解释：
-    就像配一把锁（公钥）和一把钥匙（私钥）。
-    - 公钥：可以公开，别人用它加密信息
-    - 私钥：必须保密，只有你能用它解密
 
     参数：
         key_size: 密钥长度，2048位是当前安全标准
@@ -81,11 +71,6 @@ def save_private_key(private_key, filepath, password=None):
         password = pwd or b"pki_demo_password"
     """
     将私钥加密保存到文件
-
-    通俗解释：
-    把钥匙（私钥）放进一个带密码的保险箱（加密文件），
-    即使保险箱被别人拿走，没有密码也打不开。
-
     参数：
         private_key: 私钥对象
         filepath: 保存路径
@@ -111,11 +96,6 @@ def save_private_key(private_key, filepath, password=None):
 def save_public_key(public_key, filepath):
     """
     保存公钥到文件（公钥可以公开）
-
-    通俗解释：
-    公钥就像你的银行账号——可以告诉任何人，
-    别人用它给你加密信息，但只有你能解密。
-
     参数：
         public_key: 公钥对象
         filepath: 保存路径
@@ -139,10 +119,6 @@ def generate_root_ca_certificate(private_key, subject_name=CA_NAME,
                                   validity_years=CA_VALIDITY_YEARS):
     """
     生成根CA自签名证书
-
-    通俗解释：
-    根CA给自己发证，就像是"发证总局"给自己颁发一个
-    "总局成立证书"。因为是自签名，所以不需要别人来认证。
 
     证书（X.509格式）包含：
     - 颁发者：谁发的证（这里就是自己）
@@ -256,9 +232,6 @@ def save_certificate(certificate, filepath):
 def load_and_display_certificate(filepath):
     """
     从文件读取证书并显示其信息
-
-    通俗解释：
-    就像用手机扫身份证上的二维码，读取里面的信息。
 
     参数：
         filepath: 证书文件路径

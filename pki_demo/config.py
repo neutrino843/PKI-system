@@ -1,19 +1,3 @@
-"""
-================================================================
-  PKI系统安全加固 - 核心配置模块（config.py）
-  功能：统一管理所有敏感配置项，消除硬编码密码
-
-  修复风险项：
-  - KEY-02：硬编码密码 → 环境变量 + 配置文件
-  - ALG-02/03：算法参数不可配 → 可配置化
-  - COMM-02：文件完整性 → 哈希白名单
-
-  使用方式：
-  from config import CFG
-  password = CFG.get_password("CA_KEY_PASSWORD")
-================================================================
-"""
-
 import os
 import json
 import hashlib
@@ -65,6 +49,19 @@ DEFAULT_CONFIG = {
         "max_login_attempts": 5,            # 最大登录尝试次数
         "audit_log_integrity_check": True,  # 审计日志完整性校验
         "secure_delete_passes": 3,          # 安全删除覆盖次数
+    },
+
+    # === TSA 时间戳服务配置 ===
+    "tsa": {
+        "enabled": True,                    # 是否启用TSA服务
+        "rate_limit": 500,                  # 每秒最大请求数
+        "ntp_sync_interval": 60,            # NTP同步间隔（秒）
+        "max_time_drift": 1.0,              # 最大时间偏差（秒）
+        "default_policy_oid": "1.3.6.1.5.5.7.48.1.1",  # 默认策略OID
+        "archive_enabled": True,            # 是否启用时间戳存档
+        "nonce_cache_size": 10000,          # 防重放nonce缓存大小
+        "tsa_cert_validity_days": 1825,     # TSA证书有效期（5年）
+        "supported_hash_algos": ["sha256", "sha384", "sha512", "sm3"],
     },
 
     # === 文件完整性校验白名单 ===

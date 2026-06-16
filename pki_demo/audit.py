@@ -1,20 +1,4 @@
-"""
-================================================================
-  审计日志系统（audit.py）
-  功能：不可篡改的持久化审计日志 + 异常告警
 
-  修复风险项：
-  - AUD-01：无持久化日志 → 写入文件系统，重启不丢失
-  - AUD-02：日志不可追溯 → 记录操作人、时间、操作详情
-  - AUD-03：日志可篡改 → 链式哈希完整性保护
-  - AUD-04：无异常告警 → 阈值检测和告警触发
-
-  链式哈希原理：
-  每条日志记录包含前一条日志的哈希值，
-  形成一条"哈希链"。如果有人篡改了中间的某条日志，
-  后面所有日志的哈希匹配都会失败。
-================================================================
-"""
 
 import os
 import json
@@ -46,6 +30,14 @@ EVENT_P12_EXPORT = "P12_EXPORT"         # 导出PKCS#12
 EVENT_AUTH_FAIL = "AUTH_FAIL"           # 认证失败
 EVENT_USER_MGMT = "USER_MGMT"           # 用户管理操作
 
+# TSA 事件类型
+EVENT_TSA_TIMESTAMP = "TSA_TIMESTAMP"           # 时间戳签发
+EVENT_TSA_VERIFY = "TSA_VERIFY"                 # 时间戳验签
+EVENT_TSA_CERT_ISSUE = "TSA_CERT_ISSUE"         # TSA证书签发
+EVENT_TSA_RATE_LIMIT = "TSA_RATE_LIMIT"         # 速率限制触发
+EVENT_TSA_REPLAY = "TSA_REPLAY"                 # 重放攻击检测
+EVENT_TSA_SCENARIO = "TSA_SCENARIO"             # 业务场景使用
+
 
 # ============================================================
 # 审计日志记录器
@@ -53,13 +45,6 @@ EVENT_USER_MGMT = "USER_MGMT"           # 用户管理操作
 class AuditLogger:
     """
     不可篡改的审计日志系统
-
-    通俗解释：
-    就像工厂车间的监控摄像头+打卡机——
-    每个人的每一步操作都被记录下来，
-    而且这些记录就像用铁链串起来一样，
-    如果有人想修改中间的某一笔记录，
-    整条链子就断了，立刻会被发现。
     """
 
     def __init__(self):

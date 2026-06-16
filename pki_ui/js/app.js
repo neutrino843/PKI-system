@@ -1,6 +1,5 @@
 /**
  * PKI系统 - 手绘风格前端交互逻辑 v1.0
- * 全链路对接后端API，无模拟数据
  */
 
 // ============================================================
@@ -94,6 +93,48 @@ function updateUserInfo() {
         document.getElementById('userName').textContent = currentUser.name;
         document.getElementById('userRole').textContent = currentUser.roleName;
         document.getElementById('menuUserInfo').textContent = `${currentUser.name} - ${currentUser.roleName}`;
+        // 管理菜单：仅admin可见
+        const menuUsers = document.getElementById('menuUsers');
+        if (menuUsers) {
+            menuUsers.style.display = currentUser.role === 'ca_admin' ? 'flex' : 'none';
+        }
+    }
+}
+
+/* ----- 注册 ----- */
+function showRegisterForm() {
+    document.getElementById('loginCard').style.display = 'none';
+    document.getElementById('registerCard').style.display = 'block';
+}
+function hideRegisterForm() {
+    document.getElementById('registerCard').style.display = 'none';
+    document.getElementById('loginCard').style.display = 'block';
+    document.getElementById('registerError').classList.remove('show');
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const username = document.getElementById('regUsername').value.trim();
+    const name = document.getElementById('regName').value.trim();
+    const password = document.getElementById('regPassword').value;
+    const password2 = document.getElementById('regPassword2').value;
+    const errorEl = document.getElementById('registerError');
+
+    if (password !== password2) {
+        errorEl.textContent = '两次密码输入不一致';
+        errorEl.classList.add('show');
+        return;
+    }
+
+    try {
+        const resp = await API.register(username, password, name);
+        UI.toast('注册成功，请登录', 'success');
+        // 自动填充用户名
+        document.getElementById('loginUsername').value = username;
+        hideRegisterForm();
+    } catch (err) {
+        errorEl.textContent = err.message || '注册失败';
+        errorEl.classList.add('show');
     }
 }
 
@@ -130,6 +171,11 @@ async function renderCertificates() {
                 <td style="font-size:0.85rem">${c.issuedAt}</td>
                 <td>
                     <button class="hand-btn hand-btn-sm" onclick="showCertDetail('${c.serial}')">查看</button>
+                    ${c.status === '有效' ? `
+                        <button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="API.exportPem('${c.serial}')">PEM</button>
+                        <button class="hand-btn hand-btn-sm" onclick="API.exportCrt('${c.serial}')">CRT(双击安装)</button>
+                        <button class="hand-btn hand-btn-sm hand-btn-accent" onclick="exportP12('${c.serial}','${c.cn}')">导出P12</button>
+                    ` : ''}
                     ${c.status === '有效' && currentUser && currentUser.role === 'ca_admin' ? `<button class="hand-btn hand-btn-sm hand-btn-danger" onclick="showRevokeModal('${c.serial}','${c.cn}')">吊销</button>` : ''}
                 </td>
             </tr>
@@ -175,6 +221,7 @@ async function handleCertApply(e) {
         document.getElementById('applyOrg').value = '';
         UI.toast('申请已提交：' + resp.csrId, 'success');
         if (document.getElementById('page-ra').classList.contains('active')) renderRARequests();
+        renderMyApplications();
         renderHome();
     } catch (err) {
         UI.toast('申请失败: ' + err.message, 'error');
@@ -187,29 +234,41 @@ async function renderRARequests() {
     const filter = document.getElementById('raFilter').value;
 
     try {
+        // 获取待审核列表(pending/first_approved)
         const items = await API.getCsrPending();
-        let filtered = filter === 'all' ? items : items.filter(r => r.status === filter);
+        // 也获取已批准待签发列表(approved但未issued)
+        const approvedItems = await API.getCsrApproved();
+        // 合并：只保留已批准但未签发的
+        const pendingIssue = approvedItems.filter(a => !a.issued);
+        const allItems = [...items, ...pendingIssue];
+
+        let filtered = filter === 'all' ? allItems : allItems.filter(r => r.status === filter);
 
         if (filtered.length === 0) {
             tbody.innerHTML = `<tr><td colspan="7"><div class="hand-empty"><p>没有审核记录</p></div></td></tr>`;
             return;
         }
-        tbody.innerHTML = filtered.map(r => `
-            <tr>
+        tbody.innerHTML = filtered.map(r => {
+            let statusText = r.statusText || '';
+            if (r.status === 'approved') statusText = r.issued ? '已签发' : '待签发';
+            const isApproved = r.status === 'approved';
+
+            return `<tr>
                 <td>${r.id}</td>
                 <td>${r.cn}</td>
                 <td>${r.org}</td>
                 <td>${r.submittedAt}</td>
-                <td><span class="hand-badge ${r.status === 'pending' ? 'hand-badge-warning' : r.status === 'first_approved' ? 'hand-badge-info' : r.status === 'approved' ? 'hand-badge-success' : 'hand-badge-danger'}">${r.statusText}</span></td>
-                <td style="font-size:0.85rem">${r.currentApprover}</td>
+                <td><span class="hand-badge ${isApproved ? (r.issued ? 'hand-badge-success' : 'hand-badge-info') : r.status === 'pending' ? 'hand-badge-warning' : r.status === 'first_approved' ? 'hand-badge-info' : 'hand-badge-danger'}">${statusText}</span></td>
+                <td style="font-size:0.85rem">${isApproved ? 'CA签发' : r.currentApprover}</td>
                 <td>
+                    ${isApproved && !r.issued ? `<button class="hand-btn hand-btn-sm hand-btn-primary" onclick="issueCertCSR('${r.id}')">签发证书</button>` : ''}
                     ${r.status === 'pending' || r.status === 'first_approved' ? `
                         <button class="hand-btn hand-btn-sm hand-btn-primary" onclick="approveCSR('${r.id}','${r.status}')">通过</button>
                         <button class="hand-btn hand-btn-sm hand-btn-danger" onclick="rejectCSR('${r.id}')">拒绝</button>
-                    ` : '<span style="font-size:0.8rem;color:var(--color-text-light)">已完成</span>'}
+                    ` : (!isApproved ? '<span style="font-size:0.8rem;color:var(--color-text-light)">已完成</span>' : '')}
                 </td>
-            </tr>
-        `).join('');
+            </tr>`;
+        }).join('');
     } catch (err) {
         tbody.innerHTML = `<tr><td colspan="7"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
     }
@@ -242,6 +301,34 @@ async function rejectCSR(id) {
         renderRARequests();
     } catch (err) {
         UI.toast('操作失败: ' + err.message, 'error');
+    }
+}
+
+async function issueCertCSR(id) {
+    if (!confirm(`确认签发证书 ${id}？`)) return;
+    try {
+        const resp = await API.issueCert(id);
+        UI.toast(resp.message, 'success');
+        renderRARequests();
+        renderCertificates();
+        renderHome();
+    } catch (err) {
+        UI.toast('签发失败: ' + err.message, 'error');
+    }
+}
+
+/* ----- CRL吊销 ----- */
+async function exportP12(serial, cn) {
+    const pwd = prompt(`为 ${cn} 的证书设置PKCS#12导出密码（至少6位）:`, 'p12_export_123');
+    if (!pwd || pwd.length < 6) {
+        if (pwd) UI.toast('密码至少6位', 'warning');
+        return;
+    }
+    try {
+        await API.exportP12(serial, pwd);
+        UI.toast('PKCS#12 已开始下载', 'success');
+    } catch (err) {
+        UI.toast('导出失败: ' + err.message, 'error');
     }
 }
 
@@ -327,11 +414,94 @@ async function renderAuditLogs() {
             </tr>
         `).join('');
     } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="7"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+/* ----- 我的申请记录 ----- */
+async function renderMyApplications() {
+    const tbody = document.getElementById('myAppTableBody');
+    if (!tbody) return;
+    try {
+        const apps = await API.getMyApplications();
+        if (apps.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>暂无申请记录</p></div></td></tr>`;
+            return;
+        }
+        tbody.innerHTML = apps.map(a => {
+            let badgeClass = 'hand-badge-warning';
+            if (a.status === 'issued') badgeClass = 'hand-badge-success';
+            else if (a.status === 'approved') badgeClass = 'hand-badge-info';
+            else if (a.status === 'rejected') badgeClass = 'hand-badge-danger';
+            return `<tr>
+                <td style="font-size:0.85rem">${a.id}</td>
+                <td>${a.cn}</td>
+                <td>${a.org}</td>
+                <td style="font-size:0.85rem">${a.submittedAt}</td>
+                <td><span class="hand-badge ${badgeClass}">${a.statusText}</span></td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
         tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
     }
 }
 
-/* ----- 备份管理 ----- */
+/* ----- 用户管理（仅admin可见） ----- */
+async function renderUserManagement() {
+    const tbody = document.getElementById('userTableBody');
+    if (!tbody) return;
+    try {
+        const users = await API.getUsers();
+        const roleMap = { 'ca_admin': 'CA管理员', 'ra_operator': '权限审核员', 'auditor': '审计员', 'end_user': '普通用户' };
+        tbody.innerHTML = users.map(u => {
+            if (u.id === 'admin') return ''; // 不显示admin自己
+            const isEndUser = u.role === 'end_user';
+            const isReviewer = u.role === 'ra_operator';
+            return `<tr>
+                <td>${u.id}</td>
+                <td>${u.name}</td>
+                <td><span class="hand-badge ${isReviewer ? 'hand-badge-info' : isEndUser ? 'hand-badge' : 'hand-badge-success'}">${roleMap[u.role] || u.role}</span></td>
+                <td><span class="hand-badge hand-badge-success">${u.isActive ? '正常' : '已停用'}</span></td>
+                <td>
+                    ${isEndUser ? `<button class="hand-btn hand-btn-sm hand-btn-primary" onclick="promoteReviewer('${u.id}')">提升为审核员</button>` : ''}
+                    ${isReviewer ? `<button class="hand-btn hand-btn-sm hand-btn-warning" onclick="demoteUser('${u.id}')">降级为用户</button>` : ''}
+                    <span style="font-size:0.8rem;color:var(--color-text-light)">${u.role === 'auditor' ? '审计员' : u.role === 'ca_admin' ? '管理员' : ''}</span>
+                </td>
+            </tr>`;
+        }).join('');
+        // 清理空行
+        tbody.innerHTML = tbody.innerHTML.replace(/<tr><\/tr>/g, '');
+        if (!tbody.innerHTML.trim()) {
+            tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>暂无其他用户</p></div></td></tr>`;
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+async function promoteReviewer(username) {
+    if (!confirm(`确认将用户 "${username}" 提升为权限审核员？`)) return;
+    try {
+        const resp = await API.promoteReviewer(username);
+        UI.toast(resp.message, 'success');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message, 'error');
+    }
+}
+
+async function demoteUser(username) {
+    if (!confirm(`确认将用户 "${username}" 降级为普通用户？`)) return;
+    try {
+        const resp = await API.demoteUser(username);
+        UI.toast(resp.message, 'warning');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message, 'error');
+    }
+}
+
+/* ----- 证书申请 ----- */
 async function renderBackups() {
     const tbody = document.getElementById('backupTableBody');
     try {
@@ -365,7 +535,113 @@ async function createBackup() {
 }
 
 // ============================================================
-// 手绘动效 - 按钮涟漪
+// TSA 时间戳服务
+// ============================================================
+
+async function renderTsaStatus() {
+    try {
+        const status = await API.getTsaStatus();
+        document.getElementById('tsaStatConfigured').textContent = status.configured ? '✅ 已配置' : '❌ 未配置';
+        document.getElementById('tsaStatNtp').textContent = status.timeSource?.available ? '🟢 已同步' : '🟡 系统时间';
+        document.getElementById('tsaStatTotal').textContent = status.totalIssued || 0;
+        document.getElementById('tsaStatRate').textContent = `${status.rateLimit || 500}/秒`;
+
+        const certEl = document.getElementById('tsaCertInfo');
+        if (status.certificate) {
+            certEl.innerHTML = `🔒 TSA证书: ${status.certificate.subject} | 有效期: ${status.certificate.validFrom?.substring(0,10)} ~ ${status.certificate.validTo?.substring(0,10)}`;
+        } else {
+            certEl.innerHTML = '⚠️ TSA证书未配置，请先通过命令行签发：python scripts/setup_tsa_certificate.py';
+        }
+    } catch (err) {
+        document.getElementById('tsaStatConfigured').textContent = '❌ 错误';
+        document.getElementById('tsaStatNtp').textContent = '-';
+        document.getElementById('tsaStatTotal').textContent = '-';
+        document.getElementById('tsaStatRate').textContent = '-';
+    }
+}
+
+async function renderTsaRecords() {
+    const tbody = document.getElementById('tsaRecordsBody');
+    try {
+        const records = await API.getTsaRecords(50);
+        if (records.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6"><div class="hand-empty"><p>暂无时间戳签发记录</p></div></td></tr>`;
+            return;
+        }
+        tbody.innerHTML = records.map(r => `
+            <tr>
+                <td><code style="font-size:0.8rem">${r.serialNumber ? r.serialNumber.substring(0, 16) + '...' : '-'}</code></td>
+                <td>${r.hashAlgorithm || '-'}</td>
+                <td>${r.genTime || '-'}</td>
+                <td>${r.requester || '-'}</td>
+                <td>${r.clientIp || '-'}</td>
+                <td><span class="badge badge-success">${r.status || '-'}</span></td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+async function renderScenarioRecords() {
+    const tbody = document.getElementById('scenarioRecordsBody');
+    const filter = document.getElementById('scenarioFilter')?.value || '';
+    try {
+        const records = await API.getScenarioRecords(filter, 50);
+        if (records.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6"><div class="hand-empty"><p>暂无业务场景记录</p></div></td></tr>`;
+            return;
+        }
+        const typeNames = { contract_sign: '📄 电子合同', code_release: '💻 代码发布', archive: '📁 档案归档' };
+        tbody.innerHTML = records.map(r => `
+            <tr>
+                <td>${typeNames[r.scenarioType] || r.scenarioType}</td>
+                <td><code style="font-size:0.8rem">${r.bizId || '-'}</code></td>
+                <td><code style="font-size:0.8rem">${r.tstSerial ? r.tstSerial.substring(0, 12) + '...' : '-'}</code></td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.bizDesc || ''}">${r.bizDesc || '-'}</td>
+                <td>${r.createdBy || '-'}</td>
+                <td>${r.createdAt || '-'}</td>
+            </tr>
+        `).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+// --- TSA 模态框事件绑定 ---
+
+function showTstRequestModal() {
+    document.getElementById('tstResultArea').style.display = 'none';
+    document.getElementById('tstRequestForm').reset();
+    UI.showModal('modal-tst-request');
+}
+
+function showTstVerifyModal() {
+    document.getElementById('tstVerifyResult').style.display = 'none';
+    document.getElementById('tstVerifyForm').reset();
+    UI.showModal('modal-tst-verify');
+}
+
+function showContractSignModal() {
+    document.getElementById('contractSignResult').style.display = 'none';
+    document.getElementById('contractSignForm').reset();
+    UI.showModal('modal-contract-sign');
+}
+
+function showCodeReleaseModal() {
+    document.getElementById('codeReleaseResult').style.display = 'none';
+    document.getElementById('codeReleaseForm').reset();
+    UI.showModal('modal-code-release');
+}
+
+function showArchiveModal() {
+    document.getElementById('archiveResult').style.display = 'none';
+    document.getElementById('archiveForm').reset();
+    UI.showModal('modal-archive');
+}
+
+// ============================================================
+// 手绘动画 - 按钮涟漪
 // ============================================================
 document.addEventListener('click', function(e) {
     const btn = e.target.closest('.hand-btn');
@@ -394,6 +670,8 @@ document.addEventListener('keydown', function(e) {
 // ============================================================
 document.addEventListener('DOMContentLoaded', async function() {
     document.getElementById('loginPage').style.display = 'flex';
+    document.getElementById('loginCard').style.display = 'block';
+    document.getElementById('registerCard').style.display = 'none';
     document.getElementById('appContainer').style.display = 'none';
 
     // 日期
@@ -403,6 +681,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 事件绑定
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
+    document.getElementById('registerForm').addEventListener('submit', handleRegister);
     document.getElementById('menuBtn').addEventListener('click', () => {
         document.getElementById('sideMenu').classList.contains('open') ? closeMenu() : openMenu();
     });
@@ -428,6 +707,141 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (el) {
             el.addEventListener('input', renderAuditLogs);
             el.addEventListener('change', renderAuditLogs);
+        }
+    });
+
+    // --- TSA 表单提交处理 ---
+    document.getElementById('tstRequestForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const hashValue = document.getElementById('tstHashValue').value.trim();
+        const hashAlgo = document.getElementById('tstHashAlgorithm').value;
+        const nonceInput = document.getElementById('tstNonce').value;
+        const requester = document.getElementById('tstRequester').value.trim();
+        const nonce = nonceInput ? parseInt(nonceInput) : null;
+        try {
+            const result = await API.requestTimestamp(hashValue, hashAlgo, nonce, requester);
+            const area = document.getElementById('tstResultArea');
+            area.style.display = 'block';
+            document.getElementById('tstResultContent').innerHTML = `
+                <p><strong>状态:</strong> ${result.statusString}</p>
+                <p><strong>序列号:</strong> ${result.serialNumber || '-'}</p>
+                <p><strong>生成时间:</strong> ${result.genTime || '-'}</p>
+                <p><strong>TST Token:</strong> <code style="font-size:0.75rem;word-break:break-all">${result.tstToken ? result.tstToken.substring(0, 64) + '...' : '-'}</code></p>
+                <p><strong>NTP可用:</strong> ${result.ntpAvailable ? '✅' : '❌'}</p>
+                <p><strong>时间偏差:</strong> ${(result.driftSeconds * 1000).toFixed(2)}ms</p>
+            `;
+            UI.toast('时间戳签发成功！', 'success');
+            renderTsaRecords();
+        } catch (err) {
+            UI.toast('时间戳签发失败: ' + err.message, 'error');
+        }
+    });
+
+    // TST Verify
+    document.getElementById('tstVerifyForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const tstToken = document.getElementById('tstTokenInput').value.trim();
+        const originalHash = document.getElementById('tstOriginalHash').value.trim() || null;
+        try {
+            const result = await API.verifyTimestamp(tstToken, originalHash);
+            const area = document.getElementById('tstVerifyResult');
+            area.style.display = 'block';
+            if (result.valid) {
+                area.innerHTML = `
+                    <div class="hand-card" style="background:#f0fff0">
+                        <h4 style="color:#2e7d32">✅ 时间戳验证通过</h4>
+                        <p>${result.message}</p>
+                        ${result.tstInfo ? `
+                            <p><strong>哈希算法:</strong> ${result.tstInfo.hashAlgorithm || '-'}</p>
+                            <p><strong>序列号:</strong> ${result.tstInfo.serialNumber || '-'}</p>
+                            <p><strong>生成时间:</strong> ${result.tstInfo.genTime || '-'}</p>
+                        ` : ''}
+                        ${result.hashMatch !== null ? `<p><strong>哈希匹配:</strong> ${result.hashMatch ? '✅' : '❌'}</p>` : ''}
+                    </div>
+                `;
+            } else {
+                area.innerHTML = `<div class="hand-card" style="background:#fff0f0"><h4 style="color:#c62828">❌ 验证失败</h4><p>${result.message}</p></div>`;
+            }
+        } catch (err) {
+            UI.toast('验证失败: ' + err.message, 'error');
+        }
+    });
+
+    // Contract Sign
+    document.getElementById('contractSignForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const contractId = document.getElementById('contractId').value.trim();
+        const contractHash = document.getElementById('contractHash').value.trim();
+        const signerId = document.getElementById('signerId').value.trim();
+        try {
+            const result = await API.contractSignTimestamp(contractId, contractHash, signerId);
+            const area = document.getElementById('contractSignResult');
+            area.style.display = 'block';
+            area.innerHTML = `
+                <div class="hand-card" style="background:#f0fff0">
+                    <h4 style="color:#2e7d32">✅ ${result.message}</h4>
+                    <p>合同: ${result.contractId} | 签署人: ${result.signerId}</p>
+                    <p>TST序列号: ${result.timestamp?.serialNumber || '-'}</p>
+                    <p>生成时间: ${result.timestamp?.genTime || '-'}</p>
+                </div>
+            `;
+            UI.toast(result.message, 'success');
+            UI.hideModal('modal-contract-sign');
+            renderScenarioRecords();
+        } catch (err) {
+            UI.toast('操作失败: ' + err.message, 'error');
+        }
+    });
+
+    // Code Release
+    document.getElementById('codeReleaseForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const repoName = document.getElementById('repoName').value.trim();
+        const commitHash = document.getElementById('commitHash').value.trim();
+        const branch = document.getElementById('repoBranch').value.trim() || 'main';
+        const tag = document.getElementById('repoTag').value.trim();
+        try {
+            const result = await API.codeReleaseTimestamp(repoName, commitHash, branch, tag);
+            const area = document.getElementById('codeReleaseResult');
+            area.style.display = 'block';
+            area.innerHTML = `
+                <div class="hand-card" style="background:#f0fff0">
+                    <h4 style="color:#2e7d32">✅ ${result.message}</h4>
+                    <p>仓库: ${result.repoName} | 提交: ${result.commitHash?.substring(0, 16)}...</p>
+                    <p>TST序列号: ${result.timestamp?.serialNumber || '-'}</p>
+                </div>
+            `;
+            UI.toast(result.message, 'success');
+            UI.hideModal('modal-code-release');
+            renderScenarioRecords();
+        } catch (err) {
+            UI.toast('操作失败: ' + err.message, 'error');
+        }
+    });
+
+    // Archive
+    document.getElementById('archiveForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const archiveId = document.getElementById('archiveId').value.trim();
+        const archiveHash = document.getElementById('archiveHash').value.trim();
+        const archiveName = document.getElementById('archiveName').value.trim();
+        const department = document.getElementById('archiveDept').value.trim();
+        try {
+            const result = await API.archiveTimestamp(archiveId, archiveHash, archiveName, '', department);
+            const area = document.getElementById('archiveResult');
+            area.style.display = 'block';
+            area.innerHTML = `
+                <div class="hand-card" style="background:#f0fff0">
+                    <h4 style="color:#2e7d32">✅ ${result.message}</h4>
+                    <p>档案: ${result.archiveId} | 名称: ${result.archiveName || '-'}</p>
+                    <p>TST序列号: ${result.timestamp?.serialNumber || '-'}</p>
+                </div>
+            `;
+            UI.toast(result.message, 'success');
+            UI.hideModal('modal-archive');
+            renderScenarioRecords();
+        } catch (err) {
+            UI.toast('操作失败: ' + err.message, 'error');
         }
     });
 });

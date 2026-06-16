@@ -1,6 +1,5 @@
 /**
  * PKI系统 - 前端API通信层
- * 封装所有后端REST API调用，替换模拟数据
  */
 
 const API_BASE = window.location.origin;
@@ -32,6 +31,15 @@ const API = {
     getUsers() {
         return API.request('GET', '/api/auth/users');
     },
+    register(username, password, name) {
+        return API.request('POST', '/api/auth/register', { username, password, name });
+    },
+    promoteReviewer(username) {
+        return API.request('POST', '/api/auth/promote-reviewer', { username });
+    },
+    demoteUser(username) {
+        return API.request('POST', '/api/auth/demote-user', { username });
+    },
 
     // --- 仪表盘 ---
     getStats() {
@@ -46,6 +54,40 @@ const API = {
     },
     getCertDetail(serial) {
         return API.request('GET', `/api/certificates/${encodeURIComponent(serial)}`);
+    },
+    exportPem(serial) {
+        // 直接下载PEM文件
+        const anchor = document.createElement('a');
+        anchor.href = `${API_BASE}/api/certificates/${encodeURIComponent(serial)}/export-pem`;
+        anchor.download = `cert_${serial.substring(0, 16)}.pem`;
+        anchor.click();
+    },
+    exportCrt(serial) {
+        // 下载CRT文件（Windows双击可安装）
+        const anchor = document.createElement('a');
+        anchor.href = `${API_BASE}/api/certificates/${encodeURIComponent(serial)}/export-crt`;
+        anchor.download = `cert_${serial.substring(0, 16)}.crt`;
+        anchor.click();
+    },
+    async exportP12(serial, password) {
+        // POST请求PKCS#12导出（返回二进制）
+        const resp = await fetch(`${API_BASE}/api/certificates/${encodeURIComponent(serial)}/export-p12`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ password })
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `cert_${serial.substring(0, 16)}.p12`;
+        anchor.click();
+        URL.revokeObjectURL(url);
     },
 
     // --- CSR ---
@@ -66,6 +108,12 @@ const API = {
     },
     rejectCsr(csrId, reason = '') {
         return API.request('POST', '/api/csr/reject', { csrId, reason });
+    },
+    issueCert(csrId) {
+        return API.request('POST', `/api/certificates/issue/${encodeURIComponent(csrId)}`);
+    },
+    getMyApplications() {
+        return API.request('GET', '/api/csr/my-applications');
     },
 
     // --- CRL/吊销 ---
@@ -112,5 +160,58 @@ const API = {
     // --- 配置 ---
     getConfig() {
         return API.request('GET', '/api/config');
+    },
+
+    // --- TSA 时间戳服务 ---
+    getTsaStatus() {
+        return API.request('GET', '/api/tsa/status');
+    },
+    requestTimestamp(hashValue, hashAlgorithm = 'sha256', nonce = null, requester = '') {
+        const data = { hashValue, hashAlgorithm };
+        if (nonce !== null) data.nonce = nonce;
+        if (requester) data.requester = requester;
+        return API.request('POST', '/api/tsa/timestamp', data);
+    },
+    verifyTimestamp(tstToken, originalHash = null, hashAlgorithm = null) {
+        const data = { tstToken };
+        if (originalHash) data.originalHash = originalHash;
+        if (hashAlgorithm) data.hashAlgorithm = hashAlgorithm;
+        return API.request('POST', '/api/tsa/verify', data);
+    },
+    getTsaCertificate() {
+        const anchor = document.createElement('a');
+        anchor.href = `${API_BASE}/api/tsa/certificate`;
+        anchor.download = 'tsa_cert.pem';
+        anchor.click();
+    },
+    syncTsaTime() {
+        return API.request('POST', '/api/tsa/sync-time');
+    },
+    reloadTsaCert() {
+        return API.request('POST', '/api/tsa/reload-cert');
+    },
+    getTsaRecords(limit = 100) {
+        return API.request('GET', `/api/tsa/records?limit=${limit}`);
+    },
+    // Business scenarios
+    contractSignTimestamp(contractId, contractHash, signerId, signature = '', hashAlgorithm = 'sha256') {
+        return API.request('POST', '/api/tsa/scenario/contract-sign', {
+            contractId, contractHash, signerId, signatureValue: signature, hashAlgorithm
+        });
+    },
+    codeReleaseTimestamp(repoName, commitHash, branch = 'main', tag = '', committer = '') {
+        return API.request('POST', '/api/tsa/scenario/code-release', {
+            repoName, commitHash, branch, tag, committer
+        });
+    },
+    archiveTimestamp(archiveId, archiveHash, archiveName = '', archiveType = '', department = '') {
+        return API.request('POST', '/api/tsa/scenario/archive', {
+            archiveId, archiveHash, archiveName, archiveType, department
+        });
+    },
+    getScenarioRecords(scenarioType = '', limit = 100) {
+        let path = `/api/tsa/scenario/records?limit=${limit}`;
+        if (scenarioType) path += `&scenarioType=${encodeURIComponent(scenarioType)}`;
+        return API.request('GET', path);
     },
 };

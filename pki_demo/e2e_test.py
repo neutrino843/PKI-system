@@ -1,12 +1,11 @@
 """
 ================================================================
   PKI系统端到端全流程可用性测试
-  测试所有核心功能的实际可用性，模拟完整生产流程
+  测试所有核心功能的实际可用性
 ================================================================
 """
 import sys
 import os
-import json
 import time
 import tempfile
 from pathlib import Path
@@ -40,7 +39,7 @@ def warn(name, msg):
 def cleanup():
     base = Path(__file__).parent.resolve()
     for f in base.glob("data/*.*"):
-        if f.name not in ["users.json", "sessions.json"]:
+        if f.name not in ["audit.log", "alerts.log", "pki.db", "pki.db-shm", "pki.db-wal"]:
             f.unlink(missing_ok=True)
     for f in base.glob("certs/user_*"):
         f.unlink(missing_ok=True)
@@ -136,20 +135,19 @@ test("TC-03: RBAC权限校验", test_rbac)
 
 # ========== TC-04: PBKDF2密码哈希 ==========
 def test_pbkdf2():
-    import json
     from auth import UserManager
     um = UserManager()
-    users_path = os.path.join(os.path.dirname(__file__), "data", "users.json")
-    with open(users_path, "r", encoding="utf-8") as f:
-        users = json.load(f)
-    admin_pwd = users.get("admin", {}).get("password", "")
-    assert "$" in admin_pwd, f"密码应为salt$hash格式"
-    salt_part = admin_pwd.split("$")[0]
-    assert len(salt_part) == 32, f"盐值应为32位hex(16字节)"
-    # 验证每个用户的密码都是PBKDF2格式
-    for username, info in users.items():
-        pwd = info.get("password", "")
-        assert "$" in pwd, f"{username} 的密码不是salt$hash格式"
+    users = um.list_users()
+    assert len(users) >= 4, f"至少应有4个默认用户: {len(users)}"
+    # 从数据库直接读取验证密码格式
+    from database import get_connection, transaction
+    with transaction() as conn:
+        rows = conn.execute("SELECT username, password FROM users").fetchall()
+    for row in rows:
+        pwd = row["password"]
+        assert "$" in pwd, f"{row['username']} 的密码不是salt$hash格式"
+        salt_part = pwd.split("$")[0]
+        assert len(salt_part) == 32, f"{row['username']} 盐值应为32位hex(16字节): {salt_part}"
 
 test("TC-04: PBKDF2密码哈希验证", test_pbkdf2)
 

@@ -14,7 +14,7 @@
          登录页
          ============================================================ -->
     <div id="loginPage" class="login-page">
-        <div class="login-card">
+        <div id="loginCard" class="login-card">
             <!-- 装饰涂鸦 -->
             <svg style="position:absolute;top:-12px;right:-8px;width:48px;height:48px;opacity:0.3" viewBox="0 0 48 48">
                 <path d="M24 4 L28 16 L40 16 L30 24 L34 36 L24 28 L14 36 L18 24 L8 16 L20 16 Z" fill="#FAD5C0" stroke="#DBC8BE" stroke-width="1.5"/>
@@ -32,7 +32,7 @@
                     <circle cx="10" cy="50" r="2" fill="rgba(181,230,208,0.3)"/>
                 </svg>
                 <h1>PKI 证书管家</h1>
-                <p>✎ 安全 · 可靠 · 萌萌哒</p>
+                <p>✎ 安全 · 可靠 · jenly喵</p>
             </div>
             <form id="loginForm">
                 <div id="loginError" class="login-error"></div>
@@ -47,14 +47,59 @@
                 <div class="login-actions">
                     <button type="submit" class="hand-btn hand-btn-primary hand-btn-lg">✎ 登录系统</button>
                 </div>
+                <div style="text-align:center;margin-top:12px">
+                    <button type="button" class="hand-btn hand-btn-sm" onclick="showRegisterForm()" style="background:none;border:none;color:var(--color-primary);cursor:pointer;font-family:var(--font-hand);text-decoration:underline">
+                        📝 还没有账号？点此注册喵
+                    </button>
+                </div>
             </form>
             <div class="demo-info">
-                <strong>📌 演示账号：</strong><br>
+                <strong>演示账号：</strong><br>
                 管理员：admin / admin123<br>
                 RA审核员：ra_zhang / ra123456<br>
                 审计员：auditor_li / audit123<br>
                 普通用户：user_wang / user1234
             </div>
+        </div>
+
+        <!-- 注册卡片（默认隐藏） -->
+        <div id="registerCard" class="login-card" style="display:none">
+            <div class="logo-area">
+                <svg viewBox="0 0 64 64" fill="none" width="48" height="48">
+                    <circle cx="32" cy="32" r="24" stroke="#B5E6D0" stroke-width="2.5" fill="rgba(181,230,208,0.15)"/>
+                    <path d="M28 28 L36 28 M32 24 V32" stroke="#B5E6D0" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M22 38 L32 44 L42 38" stroke="#B5E6D0" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <h1>📝 注册新账号</h1>
+                <p>✎ 注册后即可申请证书</p>
+            </div>
+            <form id="registerForm">
+                <div id="registerError" class="login-error"></div>
+                <div class="form-group">
+                    <label class="hand-label">👤 用户名</label>
+                    <input id="regUsername" class="hand-input" type="text" placeholder="字母数字下划线，3-20位" required>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">📛 显示名称</label>
+                    <input id="regName" class="hand-input" type="text" placeholder="例如：张三" required>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">🔒 密码</label>
+                    <input id="regPassword" class="hand-input" type="password" placeholder="至少6位" required>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">🔒 确认密码</label>
+                    <input id="regPassword2" class="hand-input" type="password" placeholder="再次输入密码" required>
+                </div>
+                <div class="login-actions">
+                    <button type="submit" class="hand-btn hand-btn-primary hand-btn-lg">✎ 注册</button>
+                </div>
+                <div style="text-align:center;margin-top:12px">
+                    <button type="button" class="hand-btn hand-btn-sm" onclick="hideRegisterForm()" style="background:none;border:none;color:var(--color-text-light);cursor:pointer;font-family:var(--font-hand);text-decoration:underline">
+                        ← 返回登录
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -78,7 +123,7 @@
             </div>
         </nav>
 
-        <!-- === 手绘侧边菜单（撕边纸张效果） === -->
+        <!-- === 侧边菜单（撕边纸张效果） === -->
         <div id="menuOverlay" class="menu-overlay"></div>
         <aside id="sideMenu" class="side-menu">
             <div class="menu-header">
@@ -89,7 +134,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12 L12 3 L21 12"/><path d="M5 10 V20 H19 V10"/></svg>
                 <span>首页</span>
             </a>
-            <a class="menu-item" data-page="certs" onclick="navigateTo('certs');renderCertificates()">
+            <a class="menu-item" data-page="certs" onclick="navigateTo('certs');renderCertificates();renderMyApplications()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 8 H15"/><path d="M9 12 H15"/><path d="M9 16 H12"/></svg>
                 <span>证书管理</span>
                 <span class="menu-label">申请/查看</span>
@@ -114,6 +159,11 @@
                 <span>备份管理</span>
                 <span class="menu-label">数据保护</span>
             </a>
+            <a class="menu-item" data-page="users" onclick="navigateTo('users');renderUserManagement()" id="menuUsers" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21 V19 A4 4 0 0 0 13 15 H5 A4 4 0 0 0 1 19 V21"/><circle cx="9" cy="7" r="4"/><path d="M23 21 V19 A4 4 0 0 0 20 16"/><circle cx="19" cy="7" r="3"/></svg>
+                <span>用户管理</span>
+                <span class="menu-label">授权/降级</span>
+            </a>
             <a class="menu-item" id="logoutBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21 H5 A2 2 0 0 1 3 19 V5 A2 2 0 0 1 5 3 H9"/><path d="M16 17 L21 12 L16 7"/><path d="M21 12 H9"/></svg>
                 <span>退出登录</span>
@@ -128,7 +178,7 @@
                 <div class="page-header">
                     <div>
                         <h1>🌸 首页</h1>
-                        <div class="subtitle">今天也是元气满满的一天呢~</div>
+                        <div class="subtitle">今天也要好好生活~</div>
                     </div>
                     <div style="font-family:var(--font-hand);font-size:0.9rem;color:var(--color-text-light);background:var(--color-bg-card);border:2px solid var(--color-border);border-radius:var(--radius-md);padding:8px 16px;box-shadow:var(--shadow-hand)">
                         🗓️ <span id="todayDate"></span>
@@ -143,9 +193,24 @@
                     <div class="stat-card"><div class="stat-number" id="statRevoked">0</div><div class="stat-label">🔒 已吊销</div></div>
                 </div>
 
+                <!-- 根CA证书下载提示 -->
+                <div class="hand-card mb-16" style="background:#FFF8E7;border-color:#E6C9A8">
+                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+                        <div>
+                            <strong>🔐 浏览器访问安全提示</strong>
+                            <div style="font-size:0.85rem;color:var(--color-text-light);margin-top:4px">
+                                将根CA证书导入浏览器「受信任的根证书颁发机构」，即可安全访问 HTTPS 页面
+                            </div>
+                        </div>
+                        <a href="/api/ca-certificate" class="hand-btn hand-btn-sm" style="text-decoration:none">
+                            📥 下载根CA证书(.crt)
+                        </a>
+                    </div>
+                </div>
+
                 <!-- 功能磁贴 -->
                 <div class="home-grid">
-                    <a class="func-tile tile-pink" onclick="navigateTo('certs');renderCertificates()">
+                    <a class="func-tile tile-pink" onclick="navigateTo('certs');renderCertificates();renderMyApplications()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
                             <rect x="12" y="8" width="40" height="48" rx="6" stroke="#F4B8C8" stroke-width="2.5" fill="rgba(244,184,200,0.15)"/>
                             <path d="M22 22 H42" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
@@ -154,7 +219,7 @@
                             <circle cx="48" cy="48" r="10" fill="rgba(212,197,249,0.3)" stroke="#D4C5F9" stroke-width="2"/>
                             <path d="M45 48 L48 51 L53 45" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span class="tile-label">📜 证书管理</span>
+                        <span class="tile-label"> 证书管理</span>
                     </a>
                     <a class="func-tile tile-green" onclick="navigateTo('ra');renderRARequests()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
@@ -163,7 +228,7 @@
                             <path d="M32 22 V30 L38 34" stroke="#B5E6D0" stroke-width="2.5" stroke-linecap="round"/>
                             <path d="M24 52 L32 48 L40 52" stroke="#B5E6D0" stroke-width="2" stroke-linecap="round"/>
                         </svg>
-                        <span class="tile-label">✅ RA审核</span>
+                        <span class="tile-label"> RA审核</span>
                     </a>
                     <a class="func-tile tile-peach" onclick="navigateTo('crl');renderRevokedList()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
@@ -172,7 +237,7 @@
                             <path d="M22 28 H42" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round"/>
                             <path d="M22 36 L30 44 L42 36" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        <span class="tile-label">🔒 证书吊销</span>
+                        <span class="tile-label"> 证书吊销</span>
                     </a>
                     <a class="func-tile tile-purple" onclick="navigateTo('audit');renderAuditLogs()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
@@ -184,7 +249,7 @@
                             <path d="M46 42 V50" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
                             <path d="M42 46 H50" stroke="#F4B8C8" stroke-width="2.5" stroke-linecap="round"/>
                         </svg>
-                        <span class="tile-label">📝 审计日志</span>
+                        <span class="tile-label"> 审计日志</span>
                     </a>
                     <a class="func-tile tile-blue" onclick="navigateTo('backup');renderBackups()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
@@ -215,7 +280,7 @@
             <div class="page-container">
                 <div class="page-header">
                     <div>
-                        <h1>📜 证书管理</h1>
+                        <h1> 证书管理</h1>
                         <div class="subtitle">查看和管理所有数字证书</div>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -247,6 +312,19 @@
                         </table>
                     </div>
                 </div>
+
+                <!-- 我的申请记录 -->
+                <div class="hand-card mt-16">
+                    <div class="section-title"><span>📋 我的申请记录</span></div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>申请编号</th><th>通用名称</th><th>组织</th><th>提交时间</th><th>状态</th></tr>
+                            </thead>
+                            <tbody id="myAppTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </main>
 
@@ -257,7 +335,7 @@
             <div class="page-container">
                 <div class="page-header">
                     <div>
-                        <h1>✅ RA审核</h1>
+                        <h1> RA审核</h1>
                         <div class="subtitle">证书申请审核（四眼原则：需双人复核）</div>
                     </div>
                 </div>
@@ -296,7 +374,7 @@
             <div class="page-container">
                 <div class="page-header">
                     <div>
-                        <h1>🔒 证书吊销 (CRL)</h1>
+                        <h1> 证书吊销 (CRL)</h1>
                         <div class="subtitle">证书吊销与吊销列表管理</div>
                     </div>
                     <button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="generateCRL()">📋 生成CRL</button>
@@ -416,9 +494,143 @@
         </main>
 
         <!-- ============================================================
+             用户管理页（仅admin可见）
+             ============================================================ -->
+        <main id="page-users" class="page">
+            <div class="page-container">
+                <div class="page-header">
+                    <div>
+                        <h1>👥 用户管理</h1>
+                        <div class="subtitle">管理系统用户与权限（仅管理员）</div>
+                    </div>
+                </div>
+
+                <div class="hand-card">
+                    <div class="list-toolbar">
+                        <div class="section-title" style="margin:0"><span>📋 用户列表</span></div>
+                    </div>
+                    <div style="overflow-x:auto">
+                        <table class="hand-table">
+                            <thead>
+                                <tr><th>用户名</th><th>显示名称</th><th>角色</th><th>状态</th><th>操作</th></tr>
+                            </thead>
+                            <tbody id="userTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ============================================================
+     时间戳服务（TSA）
+     ============================================================ -->
+<main id="page-tsa" class="page">
+    <div class="page-container">
+        <div class="page-header">
+            <div>
+                <h1>⏱ 时间戳服务</h1>
+                <div class="subtitle">RFC 3161 合规 · 权威时间源 · 防篡改</div>
+            </div>
+            <div class="page-header-actions">
+                <button class="hand-btn hand-btn-sm" onclick="showTstRequestModal()">📨 申请时间戳</button>
+                <button class="hand-btn hand-btn-sm" onclick="showTstVerifyModal()">✅ 验证时间戳</button>
+            </div>
+        </div>
+
+        <!-- TSA 状态卡片 -->
+        <div class="hand-card mb-16">
+            <h3>📊 TSA 服务状态</h3>
+            <div id="tsaStatusInfo" class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:12px">
+                <div class="stat-card"><div class="stat-number" id="tsaStatConfigured">-</div><div class="stat-label">证书状态</div></div>
+                <div class="stat-card"><div class="stat-number" id="tsaStatNtp">-</div><div class="stat-label">NTP时间源</div></div>
+                <div class="stat-card"><div class="stat-number" id="tsaStatTotal">-</div><div class="stat-label">已签发数量</div></div>
+                <div class="stat-card"><div class="stat-number" id="tsaStatRate">-</div><div class="stat-label">速率限制/秒</div></div>
+            </div>
+            <div id="tsaCertInfo" style="margin-top:8px;font-size:0.85rem;color:var(--color-text-light)"></div>
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="hand-btn hand-btn-sm" onclick="API.syncTsaTime().then(r=>UI.toast(r.message,'success')).catch(e=>UI.toast(e.message,'error'))">🔄 同步NTP时间</button>
+                <button class="hand-btn hand-btn-sm" onclick="API.getTsaCertificate()">📥 下载TSA证书</button>
+                <button class="hand-btn hand-btn-sm" onclick="API.reloadTsaCert().then(r=>{UI.toast(r.message,'success');renderTsaStatus()}).catch(e=>UI.toast(e.message,'error'))">🔄 重载TSA证书</button>
+            </div>
+        </div>
+
+        <!-- 业务场景入口 -->
+        <div class="home-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:16px">
+            <a class="func-tile tile-blue" onclick="showContractSignModal()">
+                <div class="tile-icon">📄</div>
+                <div class="tile-title">电子合同签署</div>
+                <div class="tile-desc">为合同数字签名附加时间戳</div>
+            </a>
+            <a class="func-tile tile-green" onclick="showCodeReleaseModal()">
+                <div class="tile-icon">💻</div>
+                <div class="tile-title">代码版本发布</div>
+                <div class="tile-desc">固化代码提交时间</div>
+            </a>
+            <a class="func-tile tile-orange" onclick="showArchiveModal()">
+                <div class="tile-icon">📁</div>
+                <div class="tile-title">电子档案归档</div>
+                <div class="tile-desc">档案入库时间戳固化</div>
+            </a>
+        </div>
+
+        <!-- 时间戳签发记录 -->
+        <div class="hand-card">
+            <div class="list-toolbar">
+                <h3>📋 时间戳签发记录</h3>
+            </div>
+            <div style="overflow-x:auto">
+                <table class="hand-table">
+                    <thead>
+                        <tr>
+                            <th>序列号</th>
+                            <th>哈希算法</th>
+                            <th>生成时间</th>
+                            <th>请求者</th>
+                            <th>客户端IP</th>
+                            <th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tsaRecordsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 业务场景记录 -->
+        <div class="hand-card mt-16">
+            <div class="list-toolbar">
+                <h3>📋 业务场景记录</h3>
+                <div>
+                    <select id="scenarioFilter" onchange="renderScenarioRecords()" style="font-family:var(--font-hand);padding:6px 12px;border:2px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg-card)">
+                        <option value="">全部场景</option>
+                        <option value="contract_sign">电子合同</option>
+                        <option value="code_release">代码发布</option>
+                        <option value="archive">档案归档</option>
+                    </select>
+                </div>
+            </div>
+            <div style="overflow-x:auto">
+                <table class="hand-table">
+                    <thead>
+                        <tr>
+                            <th>场景</th>
+                            <th>业务ID</th>
+                            <th>TST序列号</th>
+                            <th>描述</th>
+                            <th>创建人</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="scenarioRecordsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</main>
+
+        <!-- ============================================================
              模态框 - 证书申请
              ============================================================ -->
-        <div id="modal-modal-cert-apply" class="modal-overlay">
+        <div id="cert-apply" class="modal-overlay">
             <div class="modal-box">
                 <div class="modal-header">
                     <h2>✎ 申请新证书</h2>
@@ -502,6 +714,122 @@
         </div>
 
     </div><!-- /appContainer -->
+
+    <!-- 时间戳申请模态框 -->
+    <div id="modal-tst-request" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>📨 申请时间戳</h2>
+                <button class="modal-close" onclick="UI.hideModal('modal-tst-request')">X</button>
+            </div>
+            <form id="tstRequestForm">
+                <div class="form-group">
+                    <label class="hand-label">🔑 原始数据哈希值（十六进制）</label>
+                    <input id="tstHashValue" class="hand-input" type="text" placeholder="e.g. a1b2c3d4..." required>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">⚙️ 哈希算法</label>
+                    <select id="tstHashAlgorithm" style="font-family:var(--font-hand);padding:10px 16px;width:100%;border:2px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg-card)">
+                        <option value="sha256">SHA-256</option>
+                        <option value="sha384">SHA-384</option>
+                        <option value="sha512">SHA-512</option>
+                        <option value="sm3">SM3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">🔢 Nonce（防重放，可选）</label>
+                    <input id="tstNonce" class="hand-input" type="number" placeholder="留空自动生成">
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">👤 请求者标识（可选）</label>
+                    <input id="tstRequester" class="hand-input" type="text" placeholder="e.g. user@example.com">
+                </div>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">✎ 签发时间戳</button>
+            </form>
+            <!-- 结果展示区 -->
+            <div id="tstResultArea" style="display:none;margin-top:16px">
+                <div class="hand-card" style="background:#f8fff8">
+                    <h4>✅ 时间戳签发成功</h4>
+                    <div id="tstResultContent" style="font-size:0.85rem;word-break:break-all"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 时间戳验证模态框 -->
+    <div id="modal-tst-verify" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>✅ 验证时间戳</h2>
+                <button class="modal-close" onclick="UI.hideModal('modal-tst-verify')">X</button>
+            </div>
+            <form id="tstVerifyForm">
+                <div class="form-group">
+                    <label class="hand-label">📄 时间戳令牌（TST Token Hex）</label>
+                    <textarea id="tstTokenInput" class="hand-input" style="min-height:100px;resize:vertical" placeholder="粘贴时间戳令牌的十六进制编码..." required></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label">🔑 原始哈希值（可选，用于验证匹配）</label>
+                    <input id="tstOriginalHash" class="hand-input" type="text" placeholder="原始数据的十六进制哈希值">
+                </div>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">🔍 验证时间戳</button>
+            </form>
+            <div id="tstVerifyResult" style="display:none;margin-top:16px"></div>
+        </div>
+    </div>
+
+    <!-- 电子合同签署模态框 -->
+    <div id="modal-contract-sign" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>📄 电子合同时间戳</h2>
+                <button class="modal-close" onclick="UI.hideModal('modal-contract-sign')">X</button>
+            </div>
+            <form id="contractSignForm">
+                <div class="form-group"><label class="hand-label">📋 合同编号</label><input id="contractId" class="hand-input" required></div>
+                <div class="form-group"><label class="hand-label">🔑 合同哈希值（SHA-256）</label><input id="contractHash" class="hand-input" placeholder="64位十六进制" required></div>
+                <div class="form-group"><label class="hand-label">✍️ 签署人标识</label><input id="signerId" class="hand-input" required></div>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">✎ 附加时间戳</button>
+            </form>
+            <div id="contractSignResult" style="display:none;margin-top:16px"></div>
+        </div>
+    </div>
+
+    <!-- 代码发布模态框 -->
+    <div id="modal-code-release" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>💻 代码版本时间戳</h2>
+                <button class="modal-close" onclick="UI.hideModal('modal-code-release')">X</button>
+            </div>
+            <form id="codeReleaseForm">
+                <div class="form-group"><label class="hand-label">📦 仓库名称</label><input id="repoName" class="hand-input" required></div>
+                <div class="form-group"><label class="hand-label">🔑 Git提交哈希</label><input id="commitHash" class="hand-input" placeholder="完整commit hash" required></div>
+                <div class="form-group"><label class="hand-label">🌿 分支</label><input id="repoBranch" class="hand-input" value="main"></div>
+                <div class="form-group"><label class="hand-label">🏷️ 标签（可选）</label><input id="repoTag" class="hand-input" placeholder="v1.0.0"></div>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">✎ 固化时间戳</button>
+            </form>
+            <div id="codeReleaseResult" style="display:none;margin-top:16px"></div>
+        </div>
+    </div>
+
+    <!-- 档案归档模态框 -->
+    <div id="modal-archive" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2>📁 电子档案时间戳</h2>
+                <button class="modal-close" onclick="UI.hideModal('modal-archive')">X</button>
+            </div>
+            <form id="archiveForm">
+                <div class="form-group"><label class="hand-label">📋 档案编号</label><input id="archiveId" class="hand-input" required></div>
+                <div class="form-group"><label class="hand-label">🔑 档案哈希值</label><input id="archiveHash" class="hand-input" placeholder="64位十六进制" required></div>
+                <div class="form-group"><label class="hand-label">📛 档案名称（可选）</label><input id="archiveName" class="hand-input"></div>
+                <div class="form-group"><label class="hand-label">🏢 归档部门（可选）</label><input id="archiveDept" class="hand-input"></div>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">✎ 固化时间戳</button>
+            </form>
+            <div id="archiveResult" style="display:none;margin-top:16px"></div>
+        </div>
+    </div>
 
     <script src="js/api.js"></script>
     <script src="js/app.js"></script>

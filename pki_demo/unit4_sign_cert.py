@@ -3,12 +3,6 @@
   单元4：用户证书签发
   功能：CA读取用户的CSR，审核后签发正式证书（X.509格式）
 
-  通俗解释：
-  就像派出所收到你的身份证申请表（CSR）后：
-  1. 审核你的信息是否真实有效
-  2. 审核通过后，公安局在申请表上"盖钢印"（CA签名）
-  3. 制作完成的身份证就是"数字证书"
-
   证书签发是PKI体系的核心环节——CA用自己的私钥
   对用户的信息和公钥进行签名，生成具有法律效力的电子身份证。
 ==============================================================
@@ -22,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cryptography import x509
 from cryptography.x509.oid import NameOID
+from cryptography.x509 import SubjectAlternativeName, DNSName, RFC822Name
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
@@ -36,10 +31,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def load_ca_private_key(filepath, password=b"pki_demo_password"):
     """
     加载CA的加密私钥
-
-    通俗解释：
-    从保险箱（加密文件）里取出"发证机关的印章"（CA私钥）。
-    只有有了这个印章，才能给别人的证书"盖钢印"（签名）。
     """
     print("\n[正在加载CA私钥（发证机关印章）...]")
     with open(filepath, 'rb') as f:
@@ -76,8 +67,6 @@ def load_csr(filepath):
     """
     加载用户的证书签名请求（CSR）
 
-    通俗解释：
-    取出用户提交的"身份证申请表"。
     """
     with open(filepath, 'rb') as f:
         pem_data = f.read()
@@ -105,11 +94,6 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
 
     返回：
         user_cert: 用户证书对象
-
-    通俗解释：
-        这个过程就像——公安局（CA）审核你的身份证申请表后，
-        在申请表上盖公安局的钢印（私钥签名），
-        一份正式的身份证（数字证书）就制作完成了！
     """
     # 从CSR中提取用户信息和公钥
     user_name = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
@@ -139,6 +123,15 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
     cert_builder = cert_builder.add_extension(
         x509.BasicConstraints(ca=False, path_length=None),
         critical=True,  # 普通用户证书，不能给其他人发证
+    )
+
+    # 添加SubjectAlternativeName（SAN）扩展
+    # 现代浏览器/操作系统要求证书必须包含SAN
+    san_names = [DNSName(user_common_name)]
+    san_names.append(RFC822Name(f"{user_common_name}@pki.internal"))
+    cert_builder = cert_builder.add_extension(
+        x509.SubjectAlternativeName(san_names),
+        critical=False,
     )
 
     # 添加密钥用途
@@ -190,10 +183,6 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
 def _verify_csr(csr):
     """
     验证CSR签名是否有效
-
-    通俗解释：检查申请表上的签字是不是申请人本人签的。
-    cryptography库在加载CSR时已自动完成签名验证，
-    能成功加载就说明签名有效。
     """
     try:
         csr.public_key()

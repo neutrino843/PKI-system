@@ -2,12 +2,6 @@
 ==============================================================
   单元6+7：证书吊销列表（CRL）生成与查询
   功能：生成CRL（"挂失身份证名单"），并支持查询证书是否被吊销
-
-  通俗解释：
-  - 证书吊销 = 身份证挂失：证书丢了、用户离职了，需要把证书作废
-  - CRL = 公安局发布的"挂失身份证名单"
-  - 任何人拿到一张证书，都可以查CRL确认它是否已被挂失
-
   CRL包含：
   - 被吊销的证书序列号列表
   - 吊销时间
@@ -29,11 +23,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
 from security_crypto import get_hash_algorithm
+from config import CFG
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# CRL数据文件路径
-CRL_DATA_FILE = os.path.join(BASE_DIR, "crl", "revoked_certs.json")
+# CRL鏁版嵁鏂囦欢璺緞
+CRL_DATA_FILE = os.path.join(BASE_DIR, "crl", "revoked_certs_secure.json")
 
 
 # ============================================================
@@ -74,9 +69,6 @@ def revoke_certificate(cert_filepath, reason="unspecified"):
             - "superseded": 已被替换（换了新证）
             - "cessationOfOperation": 停止运营
 
-    通俗解释：
-        就像去派出所申报身份证挂失——
-        告诉公安局：这张身份证作废了，原因是什么。
     """
     # 读取要吊销的证书
     with open(cert_filepath, 'rb') as f:
@@ -150,11 +142,6 @@ def _save_revoked_list(revoked_list):
 def generate_crl(crl_filepath=None):
     """
     生成正式的证书吊销列表（CRL）文件
-
-    通俗解释：
-    CA定期发布一份正式的"挂失身份证名单"，
-    里面列出所有被吊销的证书信息，并由CA签名，
-    确保名单的真实性——防止有人伪造挂失名单。
 
     参数：
         crl_filepath: CRL文件保存路径
@@ -242,10 +229,6 @@ def check_certificate_status(cert_filepath, crl_filepath=None):
 
     返回：
         (is_revoked, status_info): 是否被吊销，以及详细信息
-
-    通俗解释：
-        就像拿着捡到的身份证去公安局查——
-        输入身份证号，系统告诉你这张证是否已经挂失。
     """
     if crl_filepath is None:
         crl_filepath = os.path.join(BASE_DIR, "crl", "ca_crl.pem")
