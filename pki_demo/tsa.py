@@ -423,11 +423,20 @@ class NTPTimeSource:
                     return True
                 except Exception:
                     continue
-            # 所有NTP服务器都失败
+            # 所有NTP服务器都失败，重置漂移值避免使用陈旧数据
+            if self._ntp_available:
+                print(f"  [WARN] NTP 同步失败：所有 {len(self.servers)} 个服务器均不可达")
+                print(f"  [WARN] 将回退至系统时间，时间精度可能下降")
+            self._drift = 0.0
             self._ntp_available = False
             return False
         except ImportError:
             # ntplib 未安装，使用系统时间
+            if self._ntp_available:
+                print("  [WARN] ntplib 未安装，无法使用NTP时间同步")
+                print("  [WARN] 请执行: pip install ntplib")
+                print("  [WARN] 将回退至系统时间，时间精度可能下降")
+            self._drift = 0.0
             self._ntp_available = False
             return False
 
@@ -565,7 +574,7 @@ class TimeStampAuthority:
     def _get_ca_password(self):
         """获取CA密码（延迟导入避免循环依赖）"""
         try:
-            from config import CFG
+            from .config import CFG
             return CFG.get_password("CA_KEY_PASSWORD")
         except Exception:
             return os.environ.get("PKI_CA_KEY_PASSWORD", "").encode()
@@ -834,7 +843,7 @@ class TimeStampAuthority:
         # 从 token 中提取签名者证书和签名数据
         try:
             # 尝试加载为 PKCS7 signed data
-            from cryptography.hazmat.primitive.serialization import pkcs7 as pkcs7_serialization
+            from cryptography.hazmat.primitives.serialization import pkcs7 as pkcs7_serialization
 
             # 直接解析 DER 以提取 TSTInfo
             # 由于 cryptography 的 PKCS7 支持有限，我们手动提取

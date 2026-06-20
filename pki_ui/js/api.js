@@ -14,7 +14,11 @@ const API = {
         if (data) opts.body = JSON.stringify(data);
         const resp = await fetch(`${API_BASE}${path}`, opts);
         const json = await resp.json();
-        if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
+        if (!resp.ok) {
+            // 兼容新旧响应格式
+            const msg = json.error?.message || json.error || json.failureInfo || `HTTP ${resp.status}`;
+            throw new Error(msg);
+        }
         return json;
     },
 
@@ -156,6 +160,83 @@ const API = {
     getExpiryCheck() {
         return API.request('GET', '/api/expiry-check');
     },
+    sendExpiryAlert() {
+        return API.request('POST', '/api/expiry-check/alert');
+    },
+    getNotifierStatus() {
+        return API.request('GET', '/api/expiry-check/notifier-status');
+    },
+
+    // --- 证书模板 ---
+    getCertTemplates() {
+        return API.request('GET', '/api/cert-templates');
+    },
+
+    // --- OCSP 在线证书状态 ---
+    getOcspStatus(serial) {
+        return API.request('GET', `/api/ocsp/status/${encodeURIComponent(serial)}`);
+    },
+    ocspBatchCheck(serials) {
+        return API.request('POST', '/api/ocsp/batch', { serials });
+    },
+    ocspCheckFile(path) {
+        return API.request('POST', '/api/ocsp/check-file', { path });
+    },
+    getOcspStats() {
+        return API.request('GET', '/api/ocsp/stats');
+    },
+    clearOcspCache() {
+        return API.request('POST', '/api/ocsp/cache/clear');
+    },
+
+    // --- LDAP/AD 目录集成 ---
+    getLdapConfig() {
+        return API.request('GET', '/api/ldap/config');
+    },
+    saveLdapConfig(config) {
+        return API.request('POST', '/api/ldap/config', config);
+    },
+    testLdapConnection() {
+        return API.request('POST', '/api/ldap/test');
+    },
+    syncLdapUsers(dryRun = true) {
+        return API.request('POST', '/api/ldap/sync', { dryRun });
+    },
+    searchLdapUsers(filter = '', base = '') {
+        return API.request('POST', '/api/ldap/search', { filter, base });
+    },
+
+    // --- ACME 自动证书管理 ---
+    getAcmeDirectory() {
+        return API.request('GET', '/api/acme/directory');
+    },
+    getAcmeNonce() {
+        return API.request('GET', '/api/acme/new-nonce');
+    },
+    createAcmeAccount(payload) {
+        return API.request('POST', '/api/acme/new-account', payload);
+    },
+    createAcmeOrder(payload) {
+        return API.request('POST', '/api/acme/new-order', payload);
+    },
+    verifyAcmeChallenge(challengeId) {
+        return API.request('POST', `/api/acme/challenge/${challengeId}`);
+    },
+    getAcmeChallengeSetup(challengeId) {
+        return API.request('GET', `/api/acme/challenge/${challengeId}/setup`);
+    },
+    getAcmeOrder(orderId) {
+        return API.request('GET', `/api/acme/order/${orderId}`);
+    },
+    finalizeAcmeOrder(orderId, csrPem) {
+        return API.request('POST', `/api/acme/finalize/${orderId}`, { csr: csrPem });
+    },
+    getAcmeCertificate(certId) {
+        return API.request('GET', `/api/acme/certificate/${certId}`);
+    },
+    getAcmeAuthorization(authId) {
+        return API.request('GET', `/api/acme/authorization/${authId}`);
+    },
 
     // --- 配置 ---
     getConfig() {
@@ -213,5 +294,29 @@ const API = {
         let path = `/api/tsa/scenario/records?limit=${limit}`;
         if (scenarioType) path += `&scenarioType=${encodeURIComponent(scenarioType)}`;
         return API.request('GET', path);
+    },
+
+    // --- 文件上传时间戳 ---
+    async requestFileTimestamp(file, hashAlgorithm = 'sha256') {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('hashAlgorithm', hashAlgorithm);
+        const resp = await fetch(`${API_BASE}/api/tsa/timestamp/file`, {
+            method: 'POST',
+            credentials: 'include',
+            body: formData,
+        });
+        const json = await resp.json();
+        if (!resp.ok) throw new Error(json.failureInfo || json.error || `HTTP ${resp.status}`);
+        return json;
+    },
+
+    // --- 文本输入时间戳 ---
+    async requestTextTimestamp(content, hashAlgorithm = 'sha256', title = '') {
+        return API.request('POST', '/api/tsa/timestamp/text', {
+            content: content,
+            hashAlgorithm: hashAlgorithm,
+            title: title,
+        });
     },
 };

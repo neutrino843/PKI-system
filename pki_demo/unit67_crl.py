@@ -22,8 +22,8 @@ from cryptography.x509.oid import NameOID, ExtensionOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
-from security_crypto import get_hash_algorithm
-from config import CFG
+from .security_crypto import get_hash_algorithm
+from .config import CFG
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +42,7 @@ def load_ca():
     with open(ca_key_path, 'rb') as f:
         ca_key = serialization.load_pem_private_key(
             f.read(), password=
-            (CFG.get_password("CA_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"pki_demo_password",
+            (CFG.get_password("CA_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"DEV_ONLY_change_me",
             backend=default_backend()
         )
 
@@ -323,14 +323,14 @@ def main():
     print(f"{'='*40}")
     show_revoked_list()
 
-    # 步骤2：吊销张三的证书（模拟张三离职）
+    # 步骤2：吊销 User1 的证书（模拟离职）
     print(f"\n{'='*40}")
     print("  [步骤2] 吊销证书（模拟身份证挂失）")
-    print("  场景：张三离职了，需要吊销他的证书")
+    print("  场景：User1 离职了，需要吊销他的证书")
     print(f"{'='*40}")
 
-    zhang_cert = os.path.join(BASE_DIR, "certs", "user_张三_cert.pem")
-    revoke_certificate(zhang_cert, reason="affiliationChanged")
+    user1_cert = os.path.join(BASE_DIR, "certs", "user_User1_cert.pem")
+    revoke_certificate(user1_cert, reason="affiliationChanged")
 
     # 步骤3：生成CRL
     print(f"\n{'='*40}")
@@ -343,12 +343,12 @@ def main():
     print("  [步骤4] 查询证书状态（查挂失名单）")
     print(f"{'='*40}")
 
-    # 查询张三的证书（应该显示已吊销）
-    check_certificate_status(zhang_cert)
+    # 查询 User1 的证书（应该显示已吊销）
+    check_certificate_status(user1_cert)
 
-    # 查询李四的证书（应该显示有效）
-    li_cert = os.path.join(BASE_DIR, "certs", "user_李四_cert.pem")
-    check_certificate_status(li_cert)
+    # 查询 User2 的证书（应该显示有效）
+    user2_cert = os.path.join(BASE_DIR, "certs", "user_User2_cert.pem")
+    check_certificate_status(user2_cert)
 
     # 步骤5：查看最终吊销列表
     print(f"\n{'='*40}")
@@ -361,8 +361,8 @@ def main():
     print(f"  [OK] CRL文件：crl/ca_crl.pem")
     print(f"  [OK] 吊销数据：crl/revoked_certs.json")
     print(f"  [INFO] 功能验证：")
-    print(f"  ├─ 张三证书：已被吊销 [OK]")
-    print(f"  └─ 李四证书：仍然有效 [OK]")
+    print(f"  ├─ User1 证书：已被吊销 [OK]")
+    print(f"  └─ User2 证书：仍然有效 [OK]")
     print("=" * 60)
 
 

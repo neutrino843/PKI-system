@@ -21,10 +21,10 @@ BASE_DIR = Path(__file__).parent.parent.resolve()
 PKI_DEMO_DIR = BASE_DIR / "pki_demo"
 sys.path.insert(0, str(PKI_DEMO_DIR))
 
-os.environ.setdefault("PKI_CA_KEY_PASSWORD", "pki_demo_pwd")
-os.environ.setdefault("PKI_AUDIT_HMAC_KEY", "audit_hmac_key_for_dev")
+os.environ.setdefault("PKI_CA_KEY_PASSWORD", "DEV_ONLY_change_me")
+os.environ.setdefault("PKI_AUDIT_HMAC_KEY", "DEV_ONLY_change_me")
 
-from tsa import (
+from pki_demo.tsa import (
     get_tsa, reset_tsa, TimeStampAuthority,
     build_tst_info, parse_tst_info_der,
     PKI_STATUS_GRANTED, PKI_STATUS_REJECTION,

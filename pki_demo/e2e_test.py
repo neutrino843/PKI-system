@@ -63,7 +63,7 @@ print("=" * 65)
 def test_init():
     import config
     assert config.CFG is not None
-    from auth import UserManager
+    from .auth import UserManager
     um = UserManager()
     users = um.list_users()
     assert len(users) >= 4, f"应有至少4个预设用户, 当前: {len(users)}"
@@ -78,7 +78,7 @@ test("TC-01: 系统初始化与预设用户检查", test_init)
 
 # ========== TC-02: 用户认证（全部4个角色） ==========
 def test_auth_all_roles():
-    from auth import SessionManager, UserManager
+    from .auth import SessionManager, UserManager
     sm = SessionManager()
     # 测试4个角色登录
     creds = [
@@ -106,7 +106,7 @@ test("TC-02: 用户认证（4角色+异常场景）", test_auth_all_roles)
 
 # ========== TC-03: RBAC权限校验 ==========
 def test_rbac():
-    from auth import SessionManager, Permission
+    from .auth import SessionManager, Permission
     sm = SessionManager()
     # admin有所有权限
     sm.login("admin", "admin123")
@@ -135,7 +135,7 @@ test("TC-03: RBAC权限校验", test_rbac)
 
 # ========== TC-04: PBKDF2密码哈希 ==========
 def test_pbkdf2():
-    from auth import UserManager
+    from .auth import UserManager
     um = UserManager()
     users = um.list_users()
     assert len(users) >= 4, f"至少应有4个默认用户: {len(users)}"
@@ -153,7 +153,7 @@ test("TC-04: PBKDF2密码哈希验证", test_pbkdf2)
 
 # ========== TC-05: 多用户会话隔离 ==========
 def test_session_isolation():
-    from auth import SessionManager
+    from .auth import SessionManager
     sm = SessionManager()
     sm.login("admin", "admin123")
     sid1 = sm._current_sid
@@ -267,7 +267,7 @@ test("TC-08: 证书申请-审核-签发全流程", test_cert_full_lifecycle)
 
 # ========== TC-09: 证书吊销与CRL ==========
 def test_revoke_and_crl():
-    from security_crl import SecureRevokedList
+    from .security_crl import SecureRevokedList
     from datetime import datetime, timezone
 
     s = SecureRevokedList()
@@ -359,7 +359,7 @@ test("TC-12: 证书到期检查", test_cert_expiry)
 
 # ========== TC-13: 文件完整性校验 ==========
 def test_file_integrity():
-    from security_crypto import FileIntegrityChecker
+    from .security_crypto import FileIntegrityChecker
     checker = FileIntegrityChecker()
     # 验证config.py完整性
     test_file = os.path.join(os.path.dirname(__file__), "config.py")
@@ -371,7 +371,7 @@ test("TC-13: 文件完整性校验", test_file_integrity)
 
 # ========== TC-14: 算法可配置化 ==========
 def test_algorithm_config():
-    from security_crypto import get_hash_algorithm, get_rsa_key_size, HASH_ALGORITHM_MAP
+    from .security_crypto import get_hash_algorithm, get_rsa_key_size, HASH_ALGORITHM_MAP
     # 测试默认值
     algo = get_hash_algorithm()
     assert algo is not None
@@ -390,7 +390,7 @@ test("TC-14: 算法参数可配置化", test_algorithm_config)
 
 # ========== TC-15: 安全删除功能 ==========
 def test_secure_delete():
-    from security_crypto import secure_delete
+    from .security_crypto import secure_delete
     # 创建临时文件
     tmp_file = "_e2e_secure_delete_test.tmp"
     with open(tmp_file, "w") as f:

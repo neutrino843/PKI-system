@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>🌸 PKI证书管理系统 - 手绘版</title>
+    <title>🌸 PKI证书管理系统 - neutrino喵喵喵</title>
     <link rel="stylesheet" href="css/handdrawn.css">
 </head>
 <body>
@@ -54,11 +54,9 @@
                 </div>
             </form>
             <div class="demo-info">
-                <strong>演示账号：</strong><br>
-                管理员：admin / admin123<br>
-                RA审核员：ra_zhang / ra123456<br>
-                审计员：auditor_li / audit123<br>
-                普通用户：user_wang / user1234
+                <strong>演示环境默认账号：</strong><br>
+                admin (管理员) / 默认密码请参考项目 README<br>
+                首次使用请先启动服务并完成初始化
             </div>
         </div>
 
@@ -123,12 +121,12 @@
             </div>
         </nav>
 
-        <!-- === 侧边菜单（撕边纸张效果） === -->
+        <!-- === 侧边菜单 === -->
         <div id="menuOverlay" class="menu-overlay"></div>
         <aside id="sideMenu" class="side-menu">
             <div class="menu-header">
                 <h3>🌸 功能菜单</h3>
-                <p id="menuUserInfo">欢迎回来~</p>
+                <p id="menuUserInfo">欢迎回来喵~</p>
             </div>
             <a class="menu-item" data-page="home" onclick="navigateTo('home')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12 L12 3 L21 12"/><path d="M5 10 V20 H19 V10"/></svg>
@@ -144,10 +142,10 @@
                 <span>RA审核</span>
                 <span class="menu-label">受理/审批</span>
             </a>
-            <a class="menu-item" data-page="crl" onclick="navigateTo('crl');renderRevokedList()">
+            <a class="menu-item" data-page="crl" onclick="navigateTo('crl');renderRevokedList();renderOcspStats()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 3 H20"/><path d="M10 7 H20"/><path d="M10 11 H20"/><path d="M4 3 H6"/><path d="M4 7 H6"/><path d="M4 11 H6"/><path d="M10 15 L14 19"/><path d="M18 21 L14 19 L18 17"/></svg>
                 <span>证书吊销</span>
-                <span class="menu-label">CRL管理</span>
+                <span class="menu-label">吊销管理</span>
             </a>
             <a class="menu-item" data-page="audit" onclick="navigateTo('audit');renderAuditLogs()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4 H20 V20 H4 Z"/><path d="M8 8 H16"/><path d="M8 12 H14"/><path d="M8 16 H12"/></svg>
@@ -158,6 +156,11 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 11 H5"/><path d="M12 4 V16"/><path d="M8 12 L12 16 L16 12"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="12" r="2"/></svg>
                 <span>备份管理</span>
                 <span class="menu-label">数据保护</span>
+            </a>
+            <a class="menu-item" data-page="tsa" onclick="navigateTo('tsa');renderTsaStatus();renderTsaRecords();renderScenarioRecords()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7 V12 L15 15"/></svg>
+                <span>时间戳服务</span>
+                <span class="menu-label">TSA/防篡改</span>
             </a>
             <a class="menu-item" data-page="users" onclick="navigateTo('users');renderUserManagement()" id="menuUsers" style="display:none">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21 V19 A4 4 0 0 0 13 15 H5 A4 4 0 0 0 1 19 V21"/><circle cx="9" cy="7" r="4"/><path d="M23 21 V19 A4 4 0 0 0 20 16"/><circle cx="19" cy="7" r="3"/></svg>
@@ -230,7 +233,7 @@
                         </svg>
                         <span class="tile-label"> RA审核</span>
                     </a>
-                    <a class="func-tile tile-peach" onclick="navigateTo('crl');renderRevokedList()">
+                    <a class="func-tile tile-peach" onclick="navigateTo('crl');renderRevokedList();renderOcspStats()">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
                             <rect x="16" y="12" width="32" height="40" rx="4" stroke="#FAD5C0" stroke-width="2.5" fill="rgba(250,213,192,0.15)"/>
                             <path d="M22 20 H42" stroke="#FAD5C0" stroke-width="2.5" stroke-linecap="round"/>
@@ -259,6 +262,15 @@
                             <path d="M44 48 L36 40" stroke="#C5E1F5" stroke-width="2" stroke-linecap="round"/>
                         </svg>
                         <span class="tile-label">💾 备份管理</span>
+                    </a>
+                    <a class="func-tile tile-purple" onclick="navigateTo('tsa');renderTsaStatus();renderTsaRecords();renderScenarioRecords()">
+                        <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
+                            <circle cx="32" cy="32" r="22" stroke="#D4C5F9" stroke-width="2.5" fill="rgba(212,197,249,0.15)"/>
+                            <path d="M32 18 V32 L42 38" stroke="#D4C5F9" stroke-width="2.5" stroke-linecap="round"/>
+                            <path d="M22 24 L32 18 L42 24" stroke="#D4C5F9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M22 40 L32 46 L42 40" stroke="#D4C5F9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span class="tile-label">⏱ 时间戳服务</span>
                     </a>
                     <a class="func-tile tile-pink" onclick="UI.toast('🔧 功能开发中，敬请期待~','info')">
                         <svg class="tile-icon" viewBox="0 0 64 64" fill="none">
@@ -374,12 +386,31 @@
             <div class="page-container">
                 <div class="page-header">
                     <div>
-                        <h1> 证书吊销 (CRL)</h1>
-                        <div class="subtitle">证书吊销与吊销列表管理</div>
+                        <h1> 证书吊销管理</h1>
+                        <div class="subtitle">证书吊销管理 · CRL 吊销列表 · OCSP 在线状态查询</div>
                     </div>
                     <button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="generateCRL()">📋 生成CRL</button>
                 </div>
 
+                <!-- OCSP 在线状态查询 -->
+                <div class="hand-card mb-16">
+                    <div class="section-title"><span>🔍 OCSP 在线状态查询</span></div>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+                        <input id="ocspSerialInput" class="hand-input" style="flex:1;min-width:200px" placeholder="输入证书序列号查询实时状态">
+                        <button class="hand-btn hand-btn-sm hand-btn-primary" onclick="handleOcspQuery()">🔍 查询状态</button>
+                        <button class="hand-btn hand-btn-sm" onclick="handleOcspQueryByFile()">📄 上传证书文件</button>
+                        <button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="handleOcspClearCache()">🗑️ 清空缓存</button>
+                    </div>
+                    <div id="ocspQueryResult" style="margin-top:12px;display:none"></div>
+                </div>
+
+                <!-- OCSP 统计信息 -->
+                <div class="hand-card mb-16">
+                    <div class="section-title"><span>📊 OCSP 响应器统计</span></div>
+                    <div id="ocspStatsContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px"></div>
+                </div>
+
+                <!-- 已吊销证书列表 -->
                 <div class="hand-card">
                     <div class="section-title"><span>📋 已吊销证书列表</span></div>
                     <div style="overflow-x:auto">
@@ -393,11 +424,12 @@
                 </div>
 
                 <div class="hand-card mt-16">
-                    <div class="section-title"><span>💡 CRL说明</span></div>
+                    <div class="section-title"><span>💡 吊销机制说明</span></div>
                     <div style="font-size:0.85rem;color:var(--color-text-light);line-height:1.8">
-                        <p>• CRL（证书吊销列表）记录了所有已吊销的证书信息</p>
-                        <p>• 系统支持 CRL 生成和发布，吊销原因包含：keyCompromise(密钥泄露)、CACompromise(CA泄露)、affiliationChanged(离职)、superseded(已替换) 等</p>
-                        <p>• 当前吊销列表由 HMAC-SHA256 保护完整性</p>
+                        <p>• <b>CRL（证书吊销列表）</b>：CA 定期签发的已吊销证书清单，客户端下载后离线校验，符合 RFC 5280 标准</p>
+                        <p>• <b>OCSP（在线证书状态协议）</b>：实时查询单张证书状态，毫秒级响应，符合 RFC 6960 标准</p>
+                        <p>• 吊销原因包含：keyCompromise(密钥泄露)、CACompromise(CA泄露)、affiliationChanged(离职)、superseded(已替换) 等</p>
+                        <p>• 当前吊销列表由 HMAC-SHA256 保护完整性，OCSP 响应缓存默认 60 秒</p>
                     </div>
                 </div>
             </div>
@@ -717,40 +749,90 @@
 
     <!-- 时间戳申请模态框 -->
     <div id="modal-tst-request" class="modal-overlay">
-        <div class="modal-box">
+        <div class="modal-box" style="max-width:620px">
             <div class="modal-header">
                 <h2>📨 申请时间戳</h2>
                 <button class="modal-close" onclick="UI.hideModal('modal-tst-request')">X</button>
             </div>
+            <div style="margin-bottom:6px;font-size:0.85rem;color:var(--color-text-light)">
+                选择数据来源 — 系统自动计算哈希并签发 RFC 3161 时间戳
+            </div>
+            <!-- 三选项卡 -->
+            <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--color-border)">
+                <button id="tstTabHash" class="hand-btn hand-btn-sm" style="flex:1;border-radius:0;border-bottom:3px solid var(--color-primary);background:none;font-weight:bold;font-size:0.85rem" onclick="switchTstTab('hash')">🔑 输入哈希</button>
+                <button id="tstTabFile" class="hand-btn hand-btn-sm" style="flex:1;border-radius:0;border-bottom:3px solid transparent;background:none;font-size:0.85rem" onclick="switchTstTab('file')">📁 上传文件</button>
+                <button id="tstTabText" class="hand-btn hand-btn-sm" style="flex:1;border-radius:0;border-bottom:3px solid transparent;background:none;font-size:0.85rem" onclick="switchTstTab('text')">✏️ 输入文本</button>
+            </div>
+
             <form id="tstRequestForm">
-                <div class="form-group">
-                    <label class="hand-label">🔑 原始数据哈希值（十六进制）</label>
-                    <input id="tstHashValue" class="hand-input" type="text" placeholder="e.g. a1b2c3d4..." required>
+                <!-- 模式一：手动输入哈希 -->
+                <div id="tstHashMode">
+                    <div class="form-group">
+                        <label class="hand-label">🔑 原始数据哈希值（十六进制）
+                            <span style="font-weight:normal;font-size:0.75rem;color:var(--color-text-light)"> — 自己算好哈希，我们帮你签</span>
+                        </label>
+                        <input id="tstHashValue" class="hand-input" type="text" placeholder="e.g. a1b2c3d4e5f6..." required>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label class="hand-label">⚙️ 哈希算法</label>
-                    <select id="tstHashAlgorithm" style="font-family:var(--font-hand);padding:10px 16px;width:100%;border:2px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg-card)">
-                        <option value="sha256">SHA-256</option>
-                        <option value="sha384">SHA-384</option>
-                        <option value="sha512">SHA-512</option>
-                        <option value="sm3">SM3</option>
-                    </select>
+                <!-- 模式二：上传文件 -->
+                <div id="tstFileMode" style="display:none">
+                    <div class="form-group">
+                        <label class="hand-label">📁 选择文件
+                            <span style="font-weight:normal;font-size:0.75rem;color:var(--color-text-light)"> — 系统自动计算哈希并签发</span>
+                        </label>
+                        <input id="tstFileInput" type="file" class="hand-input" style="padding:8px" onchange="previewTstFile()">
+                    </div>
+                    <div id="tstFileInfo" style="display:none;font-size:0.85rem;color:var(--color-text-light);margin-bottom:12px;padding:8px;background:var(--color-bg-secondary);border-radius:var(--radius-sm)"></div>
+                    <div id="tstFileHash" style="display:none;margin-bottom:12px">
+                        <label class="hand-label">🔑 文件哈希值（SHA-256 自动计算）</label>
+                        <input id="tstFileHashValue" class="hand-input" type="text" readonly style="font-family:monospace;font-size:0.75rem;background:var(--color-bg-secondary)">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label class="hand-label">🔢 Nonce（防重放，可选）</label>
-                    <input id="tstNonce" class="hand-input" type="number" placeholder="留空自动生成">
+                <!-- 模式三：输入文本 -->
+                <div id="tstTextMode" style="display:none">
+                    <div class="form-group">
+                        <label class="hand-label">✏️ 文本内容
+                            <span style="font-weight:normal;font-size:0.75rem;color:var(--color-text-light)"> — 输入任意文字，系统自动算哈希</span>
+                        </label>
+                        <textarea id="tstTextContent" class="hand-input" rows="5" style="resize:vertical;font-family:var(--font-hand);padding:10px 16px;width:100%;border:2px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg-card);box-sizing:border-box" placeholder="输入需要加盖时间戳的文本内容，例如：&#10;创意文档 v1.0&#10;发布日期：2026-06-17&#10;作者：张三&#10;本协议一式两份..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="hand-label">📌 内容标题（可选）</label>
+                        <input id="tstTextTitle" class="hand-input" type="text" placeholder="e.g. 创意文档 v1.0 / 合作协议草案">
+                    </div>
+                    <div id="tstTextPreview" style="display:none;font-size:0.85rem;color:var(--color-text-light);padding:8px;background:var(--color-bg-secondary);border-radius:var(--radius-sm);margin-bottom:12px"></div>
+                </div>
+
+                <!-- 公共配置 -->
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                    <div class="form-group" style="flex:2;min-width:180px">
+                        <label class="hand-label">⚙️ 哈希算法</label>
+                        <select id="tstHashAlgorithm" style="font-family:var(--font-hand);padding:10px 16px;width:100%;border:2px solid var(--color-border);border-radius:var(--radius-md);background:var(--color-bg-card)">
+                            <option value="sha256">SHA-256</option>
+                            <option value="sha384">SHA-384</option>
+                            <option value="sha512">SHA-512</option>
+                            <option value="sm3">SM3（国密）</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex:1;min-width:120px">
+                        <label class="hand-label">🔢 Nonce（可选）</label>
+                        <input id="tstNonce" class="hand-input" type="number" placeholder="留空自动">
+                    </div>
                 </div>
                 <div class="form-group">
                     <label class="hand-label">👤 请求者标识（可选）</label>
                     <input id="tstRequester" class="hand-input" type="text" placeholder="e.g. user@example.com">
                 </div>
-                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%">✎ 签发时间戳</button>
+                <button type="submit" class="hand-btn hand-btn-primary" style="width:100%;font-size:1.1rem">✎ 签发时间戳</button>
             </form>
+
             <!-- 结果展示区 -->
             <div id="tstResultArea" style="display:none;margin-top:16px">
                 <div class="hand-card" style="background:#f8fff8">
                     <h4>✅ 时间戳签发成功</h4>
                     <div id="tstResultContent" style="font-size:0.85rem;word-break:break-all"></div>
+                    <button class="hand-btn hand-btn-sm" style="margin-top:8px" onclick="showTstVerifyModal(document.getElementById('tstResultToken')?.textContent)">🔍 验证此令牌</button>
+                    <button class="hand-btn hand-btn-sm" style="margin-top:8px" onclick="copyTstResult()">📋 复制结果</button>
                 </div>
             </div>
         </div>

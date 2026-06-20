@@ -15,10 +15,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
-from security_crypto import get_hash_algorithm
+from .security_crypto import get_signature_hash, generate_keypair, get_signature_algorithm
 
 
 # ============================================================
@@ -37,25 +36,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # 项目根目录
 # ============================================================
 def generate_key_pair(key_size=KEY_SIZE):
     """
-    生成RSA密钥对（即一对配对的密码）
-
-
-    参数：
-        key_size: 密钥长度，2048位是当前安全标准
-
-    返回：
-        private_key: 私钥对象
+    生成密钥对（根据配置自动选择 RSA/ECC/SM2）
     """
-    print("\n [步骤1] 正在生成RSA密钥对（2048位）...")
-    print("   └─ 就像在造一把高安全性的锁和配套的钥匙")
+    algo = get_signature_algorithm()
+    print(f"\n [步骤1] 正在生成 {algo} 密钥对...")
+    print(f"   └─ 算法：{algo}，就像在造一把高安全性的锁和配套的钥匙")
 
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,      # 公开指数，65537是标准值
-        key_size=key_size,          # 密钥长度
-        backend=default_backend()
-    )
+    private_key = generate_keypair()
 
     print("   密钥对生成成功！")
+    print(f"   ├─ 算法：{algo}")
     print(f"   ├─ 私钥：已安全保存在内存中")
     print(f"   └─ 公钥：已从私钥中提取")
     return private_key
@@ -66,9 +56,9 @@ def generate_key_pair(key_size=KEY_SIZE):
 # ============================================================
 def save_private_key(private_key, filepath, password=None):
     if password is None:
-        from config import CFG
+        from .config import CFG
         pwd = CFG.get_password("CA_KEY_PASSWORD")
-        password = pwd or b"pki_demo_password"
+        password = pwd or b"DEV_ONLY_change_me"
     """
     将私钥加密保存到文件
     参数：
@@ -191,12 +181,13 @@ def generate_root_ca_certificate(private_key, subject_name=CA_NAME,
             critical=True,
         )
         # 用私钥签名——相当于在证书上"盖钢印"
-        .sign(private_key, get_hash_algorithm(), default_backend())
+        .sign(private_key, get_signature_hash(), default_backend())
     )
 
     print(f"   [OK] 根CA自签证书签发成功！")
     print(f"   ├─ 证书序列号：{cert.serial_number}")
-    print(f"   ├─ 签名算法：SHA-256 + RSA")
+    algo_name = get_signature_algorithm()
+    print(f"   ├─ 签名算法：{type(get_signature_hash()).__name__.replace('_','-')} + {algo_name}")
     print(f"   └─ 这是整个PKI体系的信任基石")
 
     return cert

@@ -201,7 +201,7 @@ def _create_tables(conn):
 
 def _migrate_from_json():
     """从旧JSON文件迁移数据到数据库（幂等：已迁移则跳过）"""
-    from config import CFG
+    from .config import CFG
 
     # 检查是否已有数据
     with transaction() as conn:

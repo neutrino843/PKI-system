@@ -1,8 +1,6 @@
 """
 ================================================================
   身份认证与权限管理模块（auth.py）
-  修复：P0-1 文件存储 → SQLite数据库（解决并发写丢失、会话持久化问题）
-  功能：PBKDF2密码哈希 + RBAC角色权限 + 持久化会话管理
 ================================================================
 """
 
@@ -16,7 +14,7 @@ from functools import wraps
 from enum import Enum
 from pathlib import Path
 
-from database import transaction, init_database
+from .database import transaction, init_database
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -172,17 +170,25 @@ class UserManager:
         self._init_default_users()
 
     def _init_default_users(self):
-        """初始化默认用户（仅数据库无用户时创建）"""
-        from database import get_connection
+        """初始化默认用户（仅数据库无用户时创建，仅用于开发/演示）
+
+        警告：默认密码仅适用于本地演示环境！
+        生产部署前必须：
+          1. 删除此方法或注释掉调用
+          2. 通过管理员接口创建真实用户
+          3. 使用强密码策略
+        """
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()
                 if row["cnt"] == 0:
+                    # DEV ONLY: 所有密码均为开发演示用途
                     default_users = [
                         ("admin", _hash_password("admin123"), "系统管理员", "ca_admin"),
-                        ("ra_zhang", _hash_password("ra123456"), "张审核员", "ra_operator"),
-                        ("auditor_li", _hash_password("audit123"), "李审计员", "auditor"),
-                        ("user_wang", _hash_password("user1234"), "王普通用户", "end_user"),
+                        ("ra_zhang", _hash_password("ra123456"), "RA审核员", "ra_operator"),
+                        ("auditor_li", _hash_password("audit123"), "审计员", "auditor"),
+                        ("user_wang", _hash_password("user1234"), "普通用户", "end_user"),
                     ]
                     now = datetime.now().isoformat()
                     for username, pwd, name, role in default_users:
@@ -197,7 +203,7 @@ class UserManager:
 
     def authenticate(self, username, password):
         """用户认证：返回用户信息字典或None"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -221,7 +227,7 @@ class UserManager:
 
     def list_users(self, role_filter=None):
         """列出所有用户"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 if role_filter:
@@ -247,7 +253,7 @@ class UserManager:
 
     def add_user(self, username, password, name, role):
         """添加用户"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 existing = conn.execute(
@@ -268,7 +274,7 @@ class UserManager:
 
     def deactivate_user(self, username):
         """停用用户"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 conn.execute(
@@ -285,7 +291,7 @@ class UserManager:
         if new_role not in valid_roles:
             return False, f"无效角色: {new_role}"
 
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -321,7 +327,7 @@ class SessionManager:
 
     def _cleanup_expired(self):
         """清理过期会话"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 now = time.time()
@@ -346,7 +352,7 @@ class SessionManager:
             now = time.time()
             now_iso = datetime.now().isoformat()
 
-            from database import get_connection
+            from .database import get_connection
             try:
                 with transaction() as conn:
                     conn.execute(
@@ -368,7 +374,7 @@ class SessionManager:
     def logout(self):
         """退出登录（从数据库删除会话）"""
         if self._current_sid:
-            from database import get_connection
+            from .database import get_connection
             try:
                 with transaction() as conn:
                     conn.execute(
@@ -385,7 +391,7 @@ class SessionManager:
         if not self._current_sid:
             return None
 
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -431,7 +437,7 @@ class SessionManager:
 
     def restore_session(self, session_id):
         """从数据库恢复会话（用于跨请求/跨启动恢复）"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -475,7 +481,7 @@ class SessionManager:
     def list_sessions(self):
         """列出所有活跃会话"""
         self._cleanup_expired()
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 rows = conn.execute(

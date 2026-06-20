@@ -15,34 +15,68 @@ from pathlib import Path
 # 确保能导入pki_demo模块
 BASE_DIR = Path(__file__).parent.resolve()
 PKI_DEMO_DIR = BASE_DIR / "pki_demo"
-sys.path.insert(0, str(PKI_DEMO_DIR))
+sys.path.insert(0, str(BASE_DIR))
+
+# 设置开发环境默认HMAC密钥（防止未配置环境变量时崩溃）
+# 生产环境应通过环境变量 PKI_CRL_HMAC_KEY / PKI_AUDIT_HMAC_KEY 设置强密码
+os.environ.setdefault("PKI_CRL_HMAC_KEY", "pki_demo_crl_hmac_key_32bytes")
+os.environ.setdefault("PKI_AUDIT_HMAC_KEY", "pki_demo_audit_hmac_key_32bytes")
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, Response
 from flask_cors import CORS
 
 # 导入PKI后端模块
-from config import CFG
-from auth import (_session_manager as auth_sm, Permission, Role,
+from pki_demo.config import CFG
+from pki_demo.auth import (_session_manager as auth_sm, Permission, Role,
                   ROLE_PERMISSIONS, UserManager, require_permission,
                   AuthorizationError)
-from audit import audit_logger
-from ra import ra_manager
-from security_crl import SecureRevokedList
-from security_crypto import get_hash_algorithm, get_rsa_key_size, FileIntegrityChecker
-from backup import BackupManager
-from cert_expiry import CertExpiryChecker
-from database import init_database, transaction
+from pki_demo.audit import audit_logger
+from pki_demo.ra import ra_manager
+from pki_demo.security_crl import SecureRevokedList
+from pki_demo.security_crypto import get_hash_algorithm, get_rsa_key_size, generate_keypair, FileIntegrityChecker
+from pki_demo.backup import BackupManager
+from pki_demo.cert_expiry import CertExpiryChecker
+from pki_demo.database import init_database, transaction
 
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtensionOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 from cryptography.x509 import SubjectAlternativeName, DNSName, RFC822Name, IPAddress
 from ipaddress import ip_address
 
+# 标准 API 错误码
+from pki_demo.api_errors import ErrorCode, ERROR_HTTP_STATUS, success, error, validation_error, paginated_result
+
+# 证书模板引擎
+from pki_demo.cert_template import (CertTemplateType, list_templates,
+    get_template, apply_template_to_builder, validate_template_params,
+    get_default_validity)
+
+# OCSP 在线证书状态协议
+from pki_demo.ocsp import ocsp_responder
+
+# SCEP/EST 自动注册协议
+from pki_demo.scep_est import scep_handler, est_handler
+
+# LDAP/AD 目录集成
+from pki_demo.ldap_auth import ldap_connector, LDAPConfig
+
+# ACME 自动证书管理协议
+from pki_demo.acme_server import acme_server
+
+# ============================================================
+# 内部访问证书校验（仅允许持有合法证书的人员启动程序）
+# ============================================================
+# 在校验通过之前，程序不会继续加载和初始化任何业务逻辑
+# 环境变量 PKI_SKIP_ACCESS_CHECK=1 可跳过校验（仅开发调试用）
+# ============================================================
+if not os.environ.get("PKI_SKIP_ACCESS_CHECK"):
+    from pki_demo.access_control import check_and_exit
+    check_and_exit()
+
 app = Flask(__name__, static_folder=None)
-app.secret_key = os.environ.get("PKI_FLASK_SECRET", "pki_system_secret_key_change_in_production")
+app.secret_key = os.environ.get("PKI_FLASK_SECRET", "DEV_ONLY_change_me_in_production")
 CORS(app, origins=["http://localhost:8080", "http://127.0.0.1:8080"],
      supports_credentials=True)
 
@@ -59,6 +93,45 @@ def restore_session():
         if not current:
             # 当前进程会话为空，尝试从数据库恢复
             auth_sm.restore_session(sid)
+
+
+# ============================================================
+# 全局异常处理器
+# ============================================================
+
+class APIError(Exception):
+    """API 业务异常"""
+    def __init__(self, code=ErrorCode.SYS_INTERNAL_ERROR, message="服务器内部错误",
+                 details=None, http_status=None):
+        self.code = code
+        self.message = message
+        self.details = details
+        self.http_status = http_status or ERROR_HTTP_STATUS.get(code, 500)
+        super().__init__(self.message)
+
+
+@app.errorhandler(APIError)
+def handle_api_error(exc):
+    return error(code=exc.code, message=exc.message,
+                 details=exc.details, http_status=exc.http_status)
+
+
+@app.errorhandler(404)
+def handle_404(exc):
+    return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                 message="请求的资源不存在", http_status=404)
+
+
+@app.errorhandler(405)
+def handle_405(exc):
+    return error(code=ErrorCode.PARAM_INVALID,
+                 message="不支持的请求方法", http_status=405)
+
+
+@app.errorhandler(500)
+def handle_500(exc):
+    return error(code=ErrorCode.SYS_INTERNAL_ERROR,
+                 message="服务器内部错误", http_status=500)
 
 
 # ============================================================
@@ -91,9 +164,11 @@ def require_permission_api(perm):
         def wrapper(*args, **kwargs):
             user = auth_sm.get_current_user()
             if not user:
-                return jsonify({"error": "未登录", "code": 401}), 401
+                return error(code=ErrorCode.AUTH_UNAUTHORIZED,
+                             message="请先登录", http_status=401)
             if not auth_sm.check_permission(perm):
-                return jsonify({"error": "权限不足", "code": 403}), 403
+                return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                             message="权限不足，无法执行此操作", http_status=403)
             return f(*args, **kwargs)
         wrapper.__name__ = f.__name__
         return wrapper
@@ -236,16 +311,19 @@ def get_cert_list():
 def api_login():
     data = request.get_json()
     if not data:
-        return jsonify({"error": "请求数据不能为空"}), 400
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="请求数据不能为空", http_status=400)
     username = sanitize_string(data.get("username", ""), MAX_NAME_LENGTH)
     password = data.get("password", "").strip()
     if not username or not password:
-        return jsonify({"error": "用户名和密码不能为空"}), 400
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="用户名和密码不能为空", http_status=400)
     if len(password) > MAX_PASSWORD_LENGTH:
-        return jsonify({"error": "密码长度超限"}), 400
+        return error(code=ErrorCode.PARAM_TOO_LONG,
+                     message="密码长度超限", http_status=400)
 
-    success, msg = auth_sm.login(username, password)
-    if success:
+    ok, msg = auth_sm.login(username, password)
+    if ok:
         user = auth_sm.get_current_user()
         # 将会话ID存入Flask session cookie（自动加密签名）
         session["session_id"] = auth_sm._current_sid
@@ -254,19 +332,19 @@ def api_login():
                          f"用户{user['name']}登录系统", user["role"])
         role_map = {"ca_admin": "CA管理员", "ra_operator": "RA操作员",
                      "auditor": "审计员", "end_user": "终端用户"}
-        return jsonify({
-            "message": msg,
+        return success({
             "user": {
                 "id": user["username"],
                 "name": user["name"],
                 "role": user["role"],
                 "roleName": role_map.get(user["role"], user["role"])
             }
-        })
+        }, message=msg)
     else:
         audit_logger.log("AUTH_FAIL", username, "LOGIN", "system", "FAILURE",
                          f"登录失败", "")
-        return jsonify({"error": msg}), 401
+        return error(code=ErrorCode.AUTH_LOGIN_FAILED,
+                     message=msg, http_status=401)
 
 
 @app.route("/api/auth/logout", methods=["POST"])
@@ -285,10 +363,11 @@ def api_logout():
 def api_me():
     user = get_current_user()
     if not user:
-        return jsonify({"error": "未登录"}), 401
+        return error(code=ErrorCode.AUTH_UNAUTHORIZED,
+                     message="未登录", http_status=401)
     role_map = {"ca_admin": "CA管理员", "ra_operator": "RA操作员",
                  "auditor": "审计员", "end_user": "终端用户"}
-    return jsonify({
+    return success({
         "id": user["username"],
         "name": user["name"],
         "role": user["role"],
@@ -300,25 +379,29 @@ def api_me():
 def api_cert_login():
     """
     客户端证书自动登录（mTLS）
-    从 Nginx 传递的 X-Client-Cert-* 头中提取客户端证书信息，
+    从反向代理传递的 X-Client-Cert-* 头中提取客户端证书信息，
     自动创建登录会话（无需密码）。
+    支持: Nginx $ssl_client_s_dn, Flask HTTPS 客户端证书
     """
     verify = request.headers.get("X-Client-Cert-Verify", "")
     if verify != "SUCCESS":
         audit_logger.log("CERT_LOGIN_FAIL", "anonymous", "LOGIN", "system", "FAILURE",
                          f"客户端证书验证失败: verify={verify}", "")
-        return jsonify({"error": "缺少有效客户端证书"}), 401
+        return error(code=ErrorCode.AUTH_CERT_LOGIN_FAILED,
+                     message="缺少有效客户端证书", http_status=401)
 
     subject_dn = request.headers.get("X-Client-Cert-Subject", "")
 
     if not subject_dn:
         audit_logger.log("CERT_LOGIN_FAIL", "anonymous", "LOGIN", "system", "FAILURE",
                          "请求头中无 X-Client-Cert-Subject", "")
-        return jsonify({"error": "请求中无客户端证书信息"}), 401
+        return error(code=ErrorCode.AUTH_CERT_LOGIN_FAILED,
+                     message="请求中无客户端证书信息", http_status=401)
 
     # 解析 Subject DN，提取 CN 字段
-    # Nginx $ssl_client_s_dn 格式为 RFC 2253: CN=admin,O=Org,C=CN
-    # 或者 OpenSSL 格式: /C=CN/O=Org/CN=admin
+    # 反向代理格式示例:
+    #   Nginx $ssl_client_s_dn: CN=admin,O=Org,C=CN  (RFC 2253)
+    #   OpenSSL format: /C=CN/O=Org/CN=admin
     cn = ""
     # 策略1: 按斜杠拆分（OpenSSL格式）
     for part in subject_dn.split("/"):
@@ -339,7 +422,8 @@ def api_cert_login():
     if not cn:
         audit_logger.log("CERT_LOGIN_FAIL", "anonymous", "LOGIN", "system", "FAILURE",
                          f"无法从证书主题中提取CN: {subject_dn}", "")
-        return jsonify({"error": "无法从客户端证书中提取用户标识"}), 401
+        return error(code=ErrorCode.AUTH_CERT_LOGIN_FAILED,
+                     message="无法从客户端证书中提取用户标识", http_status=401)
 
     # 在 users 表中查找匹配用户（CN 匹配 username）
     user_info = None
@@ -378,7 +462,8 @@ def api_cert_login():
     if not user_info:
         audit_logger.log("CERT_LOGIN_FAIL", cn, "LOGIN", "system", "FAILURE",
                          f"客户端证书CN({cn})未匹配到系统用户", "")
-        return jsonify({"error": f"证书CN({cn})未匹配到系统用户"}), 401
+        return error(code=ErrorCode.AUTH_CERT_LOGIN_FAILED,
+                     message=f"证书CN({cn})未匹配到系统用户", http_status=401)
 
     # 创建持久化会话（与普通 login 相同机制）
     sid = secrets.token_hex(32)
@@ -396,7 +481,8 @@ def api_cert_login():
                  now, now, now_iso)
             )
     except Exception as e:
-        return jsonify({"error": f"会话创建失败: {e}"}), 500
+        return error(code=ErrorCode.SYS_DB_ERROR,
+                     message=f"会话创建失败: {e}", http_status=500)
 
     # 设置当前会话状态
     auth_sm._current_sid = sid
@@ -411,15 +497,14 @@ def api_cert_login():
                      f"客户端证书自动登录: {user_info['name']}({user_info['role']})",
                      user_info["role"])
 
-    return jsonify({
-        "message": f"客户端证书登录成功！欢迎 {user_info['name']}",
+    return success({
         "user": {
             "id": user_info["username"],
             "name": user_info["name"],
             "role": user_info["role"],
             "roleName": role_map.get(user_info["role"], user_info["role"])
         }
-    })
+    }, message=f"客户端证书登录成功！欢迎 {user_info['name']}")
 
 
 @app.route("/api/auth/users", methods=["GET"])
@@ -455,27 +540,33 @@ def api_register():
     name = sanitize_string(data.get("name", ""), MAX_NAME_LENGTH)
 
     if not username or not password or not name:
-        return jsonify({"error": "用户名、密码和显示名称不能为空"}), 400
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="用户名、密码和显示名称不能为空", http_status=400)
     if len(username) < 3 or len(username) > MAX_NAME_LENGTH:
-        return jsonify({"error": "用户名长度需在3-50个字符之间"}), 400
+        return error(code=ErrorCode.PARAM_INVALID,
+                     message="用户名长度需在3-50个字符之间", http_status=400)
     if len(password) < 6:
-        return jsonify({"error": "密码长度至少6位"}), 400
+        return error(code=ErrorCode.PARAM_INVALID,
+                     message="密码长度至少6位", http_status=400)
     if len(password) > MAX_PASSWORD_LENGTH:
-        return jsonify({"error": "密码长度不能超过128位"}), 400
+        return error(code=ErrorCode.PARAM_TOO_LONG,
+                     message="密码长度不能超过128位", http_status=400)
     if len(name) < 1 or len(name) > MAX_NAME_LENGTH:
-        return jsonify({"error": "显示名称长度超限"}), 400
+        return error(code=ErrorCode.PARAM_TOO_LONG,
+                     message="显示名称长度超限", http_status=400)
     # 用户名只允许字母数字和下划线
     if not ALLOWED_USERNAME_PATTERN.match(username):
-        return jsonify({"error": "用户名只能包含字母、数字和下划线"}), 400
+        return validation_error("username", "用户名只能包含字母、数字和下划线")
 
     um = UserManager()
-    success = um.add_user(username, password, name, "end_user")
-    if success:
+    ok_ = um.add_user(username, password, name, "end_user")
+    if ok_:
         audit_logger.log("USER_CREATE", get_current_username() if get_current_user() else "anonymous",
                          "CREATE", username, "SUCCESS", f"注册新用户:{name}({username})", "end_user")
-        return jsonify({"message": "注册成功，请登录", "username": username})
+        return success({"username": username}, message="注册成功，请登录")
     else:
-        return jsonify({"error": "用户名已存在"}), 409
+        return error(code=ErrorCode.AUTH_USER_EXISTS,
+                     message="用户名已存在", http_status=409)
 
 
 @app.route("/api/auth/promote-reviewer", methods=["POST"])
@@ -484,23 +575,27 @@ def api_promote_reviewer():
     try:
         require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
     except AuthorizationError as e:
-        return jsonify({"error": str(e)}), 403
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
 
     data = request.get_json()
     username = data.get("username", "").strip()
     if not username:
-        return jsonify({"error": "用户名不能为空"}), 400
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="用户名不能为空", http_status=400)
     if username == get_current_username():
-        return jsonify({"error": "不能操作自己的账号"}), 400
+        return error(code=ErrorCode.PARAM_INVALID,
+                     message="不能操作自己的账号", http_status=400)
 
     um = UserManager()
-    success, msg = um.update_user_role(username, "ra_operator")
-    if success:
+    ok_, msg = um.update_user_role(username, "ra_operator")
+    if ok_:
         audit_logger.log("ROLE_CHANGE", get_current_username(), "UPDATE",
                          username, "SUCCESS",
                          f"将用户{username}提升为权限审核员", get_current_role())
-        return jsonify({"message": msg})
-    return jsonify({"error": msg}), 400
+        return success(message=msg)
+    return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                 message=msg, http_status=400)
 
 
 @app.route("/api/auth/demote-user", methods=["POST"])
@@ -509,23 +604,137 @@ def api_demote_user():
     try:
         require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
     except AuthorizationError as e:
-        return jsonify({"error": str(e)}), 403
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
 
     data = request.get_json()
     username = data.get("username", "").strip()
     if not username:
-        return jsonify({"error": "用户名不能为空"}), 400
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="用户名不能为空", http_status=400)
     if username == get_current_username():
-        return jsonify({"error": "不能操作自己的账号"}), 400
+        return error(code=ErrorCode.PARAM_INVALID,
+                     message="不能操作自己的账号", http_status=400)
 
     um = UserManager()
-    success, msg = um.update_user_role(username, "end_user")
-    if success:
+    ok_, msg = um.update_user_role(username, "end_user")
+    if ok_:
         audit_logger.log("ROLE_CHANGE", get_current_username(), "UPDATE",
                          username, "SUCCESS",
                          f"将用户{username}降级为普通用户", get_current_role())
-        return jsonify({"message": msg})
-    return jsonify({"error": msg}), 400
+        return success(message=msg)
+    return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                 message=msg, http_status=400)
+
+
+# ============================================================
+# API - LDAP/AD 目录集成
+# ============================================================
+
+@app.route("/api/ldap/config", methods=["GET"])
+def api_ldap_get_config():
+    """获取 LDAP 配置"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+    return success(ldap_connector.config.to_dict(),
+                   message="LDAP配置获取成功")
+
+
+@app.route("/api/ldap/config", methods=["POST"])
+def api_ldap_save_config():
+    """保存 LDAP 配置"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = ldap_connector.config
+    for key in ["server", "port", "use_tls", "bind_dn", "bind_password",
+                 "base_dn", "user_filter", "username_attr", "name_attr",
+                 "email_attr", "department_attr", "enabled"]:
+        if key in data:
+            if key in ("port",):
+                setattr(cfg, key, int(data[key]))
+            elif key in ("use_tls", "enabled"):
+                val = data[key]
+                if isinstance(val, bool):
+                    setattr(cfg, key, val)
+                else:
+                    setattr(cfg, key, str(val).lower() in ("1", "true", "yes"))
+            else:
+                setattr(cfg, key, str(data[key]))
+
+    cfg.save()
+    audit_logger.log("LDAP_CONFIG", get_current_username(), "UPDATE",
+                     "ldap", "SUCCESS", "LDAP配置已更新", get_current_role())
+    return success(cfg.to_dict(), message="LDAP配置已保存")
+
+
+@app.route("/api/ldap/test", methods=["POST"])
+def api_ldap_test():
+    """测试 LDAP 连接"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    ok, msg = ldap_connector.test_connection()
+    if ok:
+        return success({"connected": True}, message=msg)
+    return error(code=ErrorCode.SYS_CONFIG_ERROR,
+                 message=msg, http_status=400)
+
+
+@app.route("/api/ldap/sync", methods=["POST"])
+def api_ldap_sync():
+    """从 LDAP 同步用户"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    dry_run = data.get("dryRun", False)
+
+    result = ldap_connector.sync_users(dry_run=dry_run)
+
+    if result["status"] == "error":
+        return error(code=ErrorCode.SYS_INTERNAL_ERROR,
+                     message=result["message"], http_status=500)
+
+    audit_logger.log("LDAP_SYNC", get_current_username(), "SYNC",
+                     "ldap", "SUCCESS",
+                     f"LDAP同步: 创建{result['created']} 跳过{result['skipped']} 错误{result['errors']}",
+                     get_current_role())
+    return success(result, message=result["message"])
+
+
+@app.route("/api/ldap/search", methods=["POST"])
+def api_ldap_search():
+    """搜索 LDAP 用户"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    search_filter = data.get("filter", "")
+    search_base = data.get("base", "")
+
+    users = ldap_connector.search_users(
+        search_base=search_base or None,
+        search_filter=search_filter or None
+    )
+    return success({"users": users, "total": len(users)},
+                   message=f"搜索到 {len(users)} 个用户")
 
 
 # ============================================================
@@ -631,10 +840,8 @@ def api_csr_apply():
         safe_tag = hashlib.sha256(cn.encode('utf-8')).hexdigest()[:12]
         ts = datetime.now().strftime('%Y%m%d%H%M%S')
 
-        # 生成密钥对
-        private_key = rsa.generate_private_key(
-            public_exponent=65537, key_size=get_rsa_key_size(), backend=default_backend()
-        )
+        # 生成密钥对（根据配置自动选择 RSA/ECC/SM2）
+        private_key = generate_keypair()
         # 保存私钥
         user_pwd = CFG.get_password("USER_KEY_PASSWORD")
         if not user_pwd:
@@ -879,30 +1086,58 @@ def api_csr_my_applications():
     return jsonify(result)
 
 
+# ============================================================
+# API - 证书模板
+# ============================================================
+
+@app.route("/api/cert-templates", methods=["GET"])
+def api_cert_templates():
+    """获取所有证书模板列表"""
+    return success(data=list_templates(), message="获取证书模板列表成功")
+
+
+# ============================================================
+# API - 证书签发（集成模板引擎）
+# ============================================================
+
 @app.route("/api/certificates/issue/<csr_id>", methods=["POST"])
 def api_issue_cert(csr_id):
     try:
         require_permission_api(Permission.ISSUE_CERT)(lambda: None)()
     except AuthorizationError as e:
-        return jsonify({"error": str(e)}), 403
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
 
     data = request.get_json(force=True, silent=True) or {}
     extra_sans = data.get("extraSans", [])
     extra_ips = data.get("extraIps", [])
+    template_type = data.get("templateType", CertTemplateType.TLS_CLIENT.value)
+    validity_days = data.get("validityDays", 0)
+
+    # 验证模板参数
+    valid, err_msg = validate_template_params(template_type, validity_days or None)
+    if not valid:
+        return error(code=ErrorCode.PARAM_INVALID, message=err_msg, http_status=400)
 
     try:
-        _issue_single_cert(csr_id, san_dns=extra_sans, san_ip=extra_ips)
-        return jsonify({"message": f"证书已签发: {csr_id}"})
+        _issue_single_cert(csr_id, san_dns=extra_sans, san_ip=extra_ips,
+                           template_type=template_type, validity_days=validity_days)
+        return success(message=f"证书已签发: {csr_id}")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return error(code=ErrorCode.CERT_ISSUE_FAILED,
+                     message=f"证书签发失败: {str(e)}", http_status=500)
 
 
-def _issue_single_cert(csr_id, san_dns=None, san_ip=None):
-    """签发单一证书
+def _issue_single_cert(csr_id, san_dns=None, san_ip=None,
+                       template_type=CertTemplateType.TLS_CLIENT.value,
+                       validity_days=0):
+    """签发单一证书（集成证书模板引擎）
     Args:
         csr_id: 已批准的CSR ID
         san_dns: 额外的DNS名称列表（如多域名证书）
         san_ip:  额外的IP地址列表（如无域名的内部服务器）
+        template_type: 证书模板类型（默认TLS客户端证书）
+        validity_days: 证书有效期（天），0表示使用模板默认值
     """
     approved = ra_manager.get_approved_list()
     item = next((x for x in approved if x["csr_id"] == csr_id), None)
@@ -935,6 +1170,12 @@ def _issue_single_cert(csr_id, san_dns=None, san_ip=None):
 
     now = datetime.now(timezone.utc)
 
+    # 确定有效期
+    if validity_days and validity_days > 0:
+        use_validity = validity_days
+    else:
+        use_validity = get_default_validity(template_type)
+
     # 构建SubjectAlternativeName（SAN）扩展
     cn_attr = csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
     cn_value = cn_attr[0].value if cn_attr else "unknown"
@@ -960,6 +1201,7 @@ def _issue_single_cert(csr_id, san_dns=None, san_ip=None):
         safe_local = "user" + hashlib.sha256(cn_value.encode("utf-8")).hexdigest()[:8]
     san_names.append(RFC822Name(f"{safe_local}@pki.internal"))
 
+    # 构建证书
     user_cert = (
         x509.CertificateBuilder()
         .subject_name(csr.subject)
@@ -967,21 +1209,16 @@ def _issue_single_cert(csr_id, san_dns=None, san_ip=None):
         .public_key(csr.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now)
-        .not_valid_after(now + timedelta(days=365))
+        .not_valid_after(now + timedelta(days=use_validity))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
-        .add_extension(x509.KeyUsage(
-            digital_signature=True, content_commitment=True,
-            key_encipherment=True, data_encipherment=False,
-            key_agreement=False, key_cert_sign=False,
-            crl_sign=False, encipher_only=False, decipher_only=False,
-        ), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([
-            x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
-            x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH,
-        ]), critical=False)
-        .sign(ca_key, get_hash_algorithm(), default_backend())
     )
+
+    # 应用证书模板（EKU + KeyUsage）
+    user_cert = apply_template_to_builder(user_cert, template_type)
+
+    # CA签名
+    user_cert = user_cert.sign(ca_key, get_hash_algorithm(), default_backend())
 
     # 从CSR ID提取标识(tag+ts)，与密钥文件命名一致
     csr_parts = csr_id.split('-')  # CSR-{safe_tag}-{ts}
@@ -1133,6 +1370,330 @@ def api_verify_crl():
     s = SecureRevokedList()
     is_valid, msg = s.verify_integrity()
     return jsonify({"valid": is_valid, "message": msg})
+
+
+# ============================================================
+# API - OCSP 在线证书状态协议（RFC 6960）
+# ============================================================
+
+@app.route("/api/ocsp/status/<serial>", methods=["GET"])
+def api_ocsp_status(serial):
+    """查询单张证书的OCSP状态"""
+    result = ocsp_responder.check_certificate(serial)
+    status_code = 200 if result["status"] != 2 else 404
+    return jsonify(result), status_code
+
+
+@app.route("/api/ocsp/check-file", methods=["POST"])
+def api_ocsp_check_file():
+    """通过证书文件路径查询OCSP状态"""
+    data = request.get_json(force=True, silent=True) or {}
+    cert_path = data.get("path", "")
+    if not cert_path:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="证书路径不能为空", http_status=400)
+    # 路径安全检查
+    if not validate_safe_path(cert_path):
+        return error(code=ErrorCode.PARAM_INVALID,
+                     message="证书路径不合法", http_status=400)
+    result = ocsp_responder.check_certificate_by_file(cert_path)
+    status_code = 200 if result["status"] != 2 else 404
+    return jsonify(result), status_code
+
+
+@app.route("/api/ocsp/batch", methods=["POST"])
+def api_ocsp_batch():
+    """批量查询多张证书的OCSP状态"""
+    data = request.get_json(force=True, silent=True) or {}
+    serials = data.get("serials", [])
+    if not serials or not isinstance(serials, list):
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="serials 参数必须是证书序列号列表", http_status=400)
+    if len(serials) > 200:
+        return error(code=ErrorCode.PARAM_OUT_OF_RANGE,
+                     message="批量查询最多支持200张证书", http_status=400)
+    result = ocsp_responder.check_certificates_batch(serials)
+    return jsonify(result)
+
+
+@app.route("/api/ocsp/stats", methods=["GET"])
+def api_ocsp_stats():
+    """获取OCSP响应器统计信息"""
+    return jsonify(ocsp_responder.get_statistics())
+
+
+@app.route("/api/ocsp/cache/clear", methods=["POST"])
+def api_ocsp_clear_cache():
+    """清空OCSP缓存"""
+    try:
+        require_permission_api(Permission.GENERATE_CRL)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+    return jsonify(ocsp_responder.clear_cache())
+
+
+# ============================================================
+# API - SCEP 自动注册协议（RFC 8894）
+# ============================================================
+
+@app.route("/api/scep/cacerts", methods=["GET"])
+def api_scep_cacerts():
+    """SCEP: 获取 CA 证书"""
+    cert_pem = scep_handler.get_ca_cert_pem()
+    if not cert_pem:
+        return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                     message="CA证书不存在", http_status=404)
+    return Response(cert_pem, mimetype="application/x-pki-message")
+
+
+@app.route("/api/scep/cacaps", methods=["GET"])
+def api_scep_cacaps():
+    """SCEP: 获取 CA 能力"""
+    return jsonify({"caps": scep_handler.get_ca_caps()})
+
+
+@app.route("/api/scep/pkcsreq", methods=["POST"])
+def api_scep_pkcsreq():
+    """SCEP: 提交 PKCS#10 CSR（设备自动注册）"""
+    try:
+        require_permission_api(Permission.APPLY_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    csr_pem = data.get("csr", "")
+    challenge = data.get("challengePassword", "")
+    transaction_id = data.get("transactionId", "")
+
+    if not csr_pem:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="CSR 内容不能为空", http_status=400)
+
+    result = scep_handler.handle_pkcs_req(csr_pem, challenge, transaction_id)
+    if result["status"] == "fail":
+        return error(code=ErrorCode.CERT_CSR_INVALID,
+                     message=result["message"], http_status=400)
+    return jsonify(result)
+
+
+@app.route("/api/scep/token", methods=["POST"])
+def api_scep_generate_token():
+    """SCEP: 管理员生成设备注册令牌"""
+    try:
+        require_permission_api(Permission.MANAGE_USERS)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    device = data.get("device", "").strip()
+    if not device:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="设备名称不能为空", http_status=400)
+    valid_hours = int(data.get("validHours", 24))
+    if valid_hours < 1 or valid_hours > 720:
+        return error(code=ErrorCode.PARAM_OUT_OF_RANGE,
+                     message="有效期范围: 1-720小时", http_status=400)
+
+    token = scep_handler.generate_scep_token(device, valid_hours)
+    audit_logger.log("SCEP_TOKEN", get_current_username(), "CREATE",
+                     device, "SUCCESS",
+                     f"SCEP设备注册令牌已生成: {device}", get_current_role())
+    return success(token, message=f"令牌已生成，有效期{valid_hours}小时")
+
+
+@app.route("/api/scep/verify-token", methods=["POST"])
+def api_scep_verify_token():
+    """SCEP: 验证设备注册令牌"""
+    data = request.get_json(force=True, silent=True) or {}
+    token = data.get("token", "").strip()
+    device = data.get("device", "").strip()
+    if not token:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="令牌不能为空", http_status=400)
+    valid = scep_handler.verify_scep_token(token, device or None)
+    return success({"valid": valid}, message="令牌有效" if valid else "令牌无效或已过期")
+
+
+# ============================================================
+# API - EST 自动注册协议（RFC 7030）
+# ============================================================
+
+@app.route("/api/est/cacerts", methods=["GET"])
+def api_est_cacerts():
+    """EST: 获取 CA 证书链"""
+    certs = est_handler.get_ca_certs_pkcs7()
+    return Response(certs, mimetype="application/pkcs7-mime")
+
+
+@app.route("/api/est/csrattrs", methods=["GET"])
+def api_est_csrattrs():
+    """EST: 获取 CSR 属性建议"""
+    return jsonify(est_handler.get_csr_attributes())
+
+
+@app.route("/api/est/simpleenroll", methods=["POST"])
+def api_est_simpleenroll():
+    """EST: 简单注册（设备自动申请证书）"""
+    try:
+        require_permission_api(Permission.APPLY_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    csr_pem = data.get("csr", "")
+    if not csr_pem:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="CSR 内容不能为空", http_status=400)
+
+    # EST 注册走标准 RA 审批流程
+    result = scep_handler.handle_pkcs_req(csr_pem, challenge_password="",
+                                          transaction_id=f"est_{secrets.token_hex(8)}")
+    if result["status"] == "fail":
+        return error(code=ErrorCode.CERT_CSR_INVALID,
+                     message=result["message"], http_status=400)
+    return success(result, message="EST注册请求已提交")
+
+
+# ============================================================
+# API - ACME 自动证书管理协议（RFC 8555）
+# ============================================================
+
+@app.route("/api/acme/directory", methods=["GET"])
+def api_acme_directory():
+    """ACME: 目录端点（ACME 客户端入口）"""
+    base_url = request.host_url.rstrip("/")
+    return jsonify(acme_server.get_directory(base_url))
+
+
+@app.route("/api/acme/new-nonce", methods=["GET", "HEAD"])
+def api_acme_new_nonce():
+    """ACME: 获取新 Nonce"""
+    nonce = acme_server.nonce_mgr.generate()
+    resp = success({"nonce": nonce}, message="新 nonce 已生成")
+    resp.headers["Replay-Nonce"] = nonce
+    return resp
+
+
+@app.route("/api/acme/new-account", methods=["POST"])
+def api_acme_new_account():
+    """ACME: 创建新账户"""
+    try:
+        require_permission_api(Permission.APPLY_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    payload = request.get_json(force=True, silent=True) or {}
+    account = acme_server.create_account(payload)
+    return success(account, message="ACME账户创建成功")
+
+
+@app.route("/api/acme/new-order", methods=["POST"])
+def api_acme_new_order():
+    """ACME: 创建新订单（域名申请）"""
+    try:
+        require_permission_api(Permission.APPLY_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    payload = request.get_json(force=True, silent=True) or {}
+    account_kid = payload.get("kid", "anonymous")
+    order, err = acme_server.create_order(payload, account_kid)
+    if err:
+        return error(code=ErrorCode.CERT_CSR_INVALID,
+                     message=err, http_status=400)
+    return success(order, message="ACME订单已创建")
+
+
+@app.route("/api/acme/challenge/<challenge_id>", methods=["POST"])
+def api_acme_verify_challenge(challenge_id):
+    """ACME: 验证 HTTP-01 挑战"""
+    try:
+        require_permission_api(Permission.APPLY_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    ok, msg = acme_server.order_mgr.verify_challenge(challenge_id)
+    if ok:
+        # 生成验证文件内容供客户端部署
+        info = acme_server.setup_http01_challenge_file(challenge_id)
+        return success(info, message="挑战验证通过")
+    return error(code=ErrorCode.SYS_INTERNAL_ERROR,
+                 message=msg, http_status=400)
+
+
+@app.route("/api/acme/challenge/<challenge_id>/setup", methods=["GET"])
+def api_acme_challenge_setup(challenge_id):
+    """ACME: 获取 HTTP-01 验证文件配置信息"""
+    info = acme_server.setup_http01_challenge_file(challenge_id)
+    if not info:
+        return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                     message="挑战不存在", http_status=404)
+    return success(info, message="验证文件配置信息")
+
+
+@app.route("/api/acme/order/<order_id>", methods=["GET"])
+def api_acme_get_order(order_id):
+    """ACME: 查询订单状态"""
+    order = acme_server.order_mgr.get_order(order_id)
+    if not order:
+        return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                     message="订单不存在", http_status=404)
+    return success(order, message="订单信息获取成功")
+
+
+@app.route("/api/acme/finalize/<order_id>", methods=["POST"])
+def api_acme_finalize(order_id):
+    """ACME: 完成订单（提交 CSR 并签发证书）"""
+    try:
+        require_permission_api(Permission.ISSUE_CERT)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    data = request.get_json(force=True, silent=True) or {}
+    csr_pem = data.get("csr", "")
+    if not csr_pem:
+        return error(code=ErrorCode.PARAM_MISSING,
+                     message="CSR 内容不能为空", http_status=400)
+
+    success_flag, result = acme_server.verify_and_finalize(order_id, csr_pem)
+    if success_flag:
+        return success(result, message="证书签发成功")
+    return error(code=ErrorCode.CERT_ISSUE_FAILED,
+                 message=result.get("error", "签发失败"), http_status=400)
+
+
+@app.route("/api/acme/certificate/<cert_id>", methods=["GET"])
+def api_acme_get_certificate(cert_id):
+    """ACME: 获取已签发的证书"""
+    cert_info = acme_server.order_mgr.get_certificate(cert_id)
+    if not cert_info:
+        return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                     message="证书不存在", http_status=404)
+
+    from flask import Response as FlaskResponse
+    return FlaskResponse(
+        cert_info["pem"],
+        mimetype="application/pem-certificate-chain",
+        headers={"Content-Disposition": f"attachment; filename=cert_{cert_id}.pem"}
+    )
+
+
+@app.route("/api/acme/authorization/<auth_id>", methods=["GET"])
+def api_acme_get_auth(auth_id):
+    """ACME: 查询授权状态"""
+    auth = acme_server.order_mgr.get_authorization(auth_id)
+    if not auth:
+        return error(code=ErrorCode.RESOURCE_NOT_FOUND,
+                     message="授权不存在", http_status=404)
+    return success(auth, message="授权信息获取成功")
 
 
 # ============================================================
@@ -1361,11 +1922,40 @@ def api_export_crt(serial):
 
 @app.route("/api/expiry-check", methods=["GET"])
 def api_expiry_check():
+    """检查证书到期状态"""
     checker = CertExpiryChecker()
     results = checker.scan_certificates()
     if "error" in results:
-        return jsonify({"error": results["error"]}), 500
+        return error(code=ErrorCode.SYS_INTERNAL_ERROR,
+                     message=results["error"], http_status=500)
     return jsonify(results)
+
+
+@app.route("/api/expiry-check/alert", methods=["POST"])
+def api_expiry_alert():
+    """扫描并发送告警通知"""
+    try:
+        require_permission_api(Permission.GENERATE_CRL)(lambda: None)()
+    except AuthorizationError as e:
+        return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
+                     message=str(e), http_status=403)
+
+    checker = CertExpiryChecker()
+    result = checker.scan_and_alert()
+
+    notifier_status = checker.get_notifier_status()
+    return jsonify({
+        "scan": result["scan"],
+        "alerts": result["alerts"],
+        "notifier": notifier_status,
+    })
+
+
+@app.route("/api/expiry-check/notifier-status", methods=["GET"])
+def api_expiry_notifier_status():
+    """获取告警通知器配置状态"""
+    checker = CertExpiryChecker()
+    return jsonify(checker.get_notifier_status())
 
 
 # ============================================================
@@ -1394,7 +1984,7 @@ def api_config():
 
 # 延迟导入 TSA 模块
 def _get_tsa():
-    from tsa import get_tsa
+    from pki_demo.tsa import get_tsa
     return get_tsa()
 
 
@@ -1455,7 +2045,7 @@ def api_tsa_timestamp():
         )
         # 同时存入数据库
         try:
-            from database import transaction
+            from pki_demo.database import transaction
             now_iso = datetime.now(timezone.utc).isoformat()
             with transaction() as conn:
                 conn.execute(
@@ -1497,7 +2087,7 @@ def api_tsa_timestamp():
     elif result["status"] == 2:  # rejected
         # 记录安全事件（如果超速或重放）
         try:
-            from database import transaction
+            from pki_demo.database import transaction
             now_iso = datetime.now(timezone.utc).isoformat()
             failure = result.get("failureInfo", "")
             event_type = "tsa_replay" if "重放" in failure else (
@@ -1520,6 +2110,202 @@ def api_tsa_timestamp():
         }), 400
 
     return jsonify(result)
+
+
+@app.route("/api/tsa/timestamp/file", methods=["POST"])
+def api_tsa_timestamp_file():
+    """
+    文件上传时间戳接口 - 上传文件自动计算哈希并签发时间戳
+    请求: multipart/form-data
+        - file: 要签发时间戳的文件
+        - hashAlgorithm: sha256/sha384/sha512/sm3 (optional, default: sha256)
+    返回:
+        - 时间戳令牌 + 文件哈希 + 文件信息
+    """
+    try:
+        require_permission_api(Permission.TSA_TIMESTAMP)(lambda: None)()
+    except AuthorizationError as e:
+        return jsonify({"error": str(e)}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "请上传文件"}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "文件名为空"}), 400
+
+    hash_algo_name = request.form.get("hashAlgorithm", "sha256").lower()
+    hash_algo_name = hash_algo_name.replace("-", "")
+
+    # 读取文件内容并计算哈希
+    file_data = file.read()
+    algo_map = {
+        "sha256": hashlib.sha256(),
+        "sha384": hashlib.sha384(),
+        "sha512": hashlib.sha512(),
+        "sm3": hashlib.new("sm3") if hasattr(hashlib, "new") else None,
+    }
+    if hash_algo_name == "sm3":
+        try:
+            from cryptography.hazmat.primitives import hashes as crypto_hashes
+            digest = crypto_hashes.Hash(crypto_hashes.SM3())
+            digest.update(file_data)
+            hash_value = digest.finalize()
+        except Exception:
+            return jsonify({"error": "SM3 哈希计算失败，请使用其他算法或检查 cryptography 版本"}), 400
+    else:
+        hasher = algo_map.get(hash_algo_name)
+        if hasher is None:
+            return jsonify({"error": f"不支持的哈希算法: {hash_algo_name}"}), 400
+        hasher.update(file_data)
+        hash_value = hasher.digest()
+
+    file_size = len(file_data)
+    file_name = file.filename
+
+    # 签发时间戳
+    client_ip = request.remote_addr or "unknown"
+    requester = get_current_username()
+
+    tsa = _get_tsa()
+    result = tsa.generate_timestamp(
+        hash_value=hash_value,
+        hash_algo=hash_algo_name,
+        client_ip=client_ip,
+        requester=requester,
+    )
+
+    if result["status"] != 0:
+        return jsonify({
+            "status": "rejected",
+            "failureInfo": result.get("failureInfo", "时间戳生成失败"),
+        }), 400
+
+    # 记录审计日志
+    audit_logger.log(
+        "TSA_TIMESTAMP", requester, "CREATE",
+        f"FILE-{file_name}", "SUCCESS",
+        f"文件[{file_name}]时间戳签发: 算法={hash_algo_name}, 大小={file_size}字节",
+        get_current_role()
+    )
+
+    return jsonify({
+        "status": "granted",
+        "statusString": "文件时间戳签发成功",
+        "fileInfo": {
+            "fileName": file_name,
+            "fileSize": file_size,
+            "fileSizeStr": _format_file_size(file_size),
+        },
+        "hashAlgorithm": hash_algo_name,
+        "hashValue": hash_value.hex(),
+        "serialNumber": result.get("serialNumber", ""),
+        "genTime": result.get("genTime", ""),
+        "tstToken": result.get("tstToken", ""),
+        "tstInfo": result.get("tstInfo", ""),
+        "driftSeconds": result.get("driftSeconds", 0),
+        "ntpAvailable": result.get("ntpAvailable", False),
+    })
+
+
+@app.route("/api/tsa/timestamp/text", methods=["POST"])
+def api_tsa_timestamp_text():
+    """
+    文本内容时间戳接口 - 提交文本自动计算哈希并签发时间戳
+    请求体: {
+        "content": "要加盖时间戳的文本内容",
+        "hashAlgorithm": "sha256" (optional),
+        "title": "内容标题 (optional)"
+    }
+    返回:
+        - 时间戳令牌 + 内容哈希 + 内容预览
+    """
+    try:
+        require_permission_api(Permission.TSA_TIMESTAMP)(lambda: None)()
+    except AuthorizationError as e:
+        return jsonify({"error": str(e)}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    if not body or not body.get("content"):
+        return jsonify({"error": "content 不能为空"}), 400
+
+    content = body["content"]
+    title = body.get("title", "").strip()
+    hash_algo_name = body.get("hashAlgorithm", "sha256").lower().replace("-", "")
+
+    # 计算内容哈希
+    content_bytes = content.encode("utf-8")
+    if hash_algo_name == "sm3":
+        try:
+            from cryptography.hazmat.primitives import hashes as crypto_hashes
+            digest = crypto_hashes.Hash(crypto_hashes.SM3())
+            digest.update(content_bytes)
+            hash_value = digest.finalize()
+        except Exception:
+            return jsonify({"error": "SM3 哈希计算失败"}), 400
+    else:
+        import hashlib as hl
+        algo_fn = getattr(hl, hash_algo_name, None)
+        if algo_fn is None:
+            return jsonify({"error": f"不支持的哈希算法: {hash_algo_name}"}), 400
+        hash_value = algo_fn(content_bytes).digest()
+
+    # 签发时间戳
+    client_ip = request.remote_addr or "unknown"
+    requester = get_current_username()
+
+    tsa = _get_tsa()
+    result = tsa.generate_timestamp(
+        hash_value=hash_value,
+        hash_algo=hash_algo_name,
+        client_ip=client_ip,
+        requester=requester,
+    )
+
+    if result["status"] != 0:
+        return jsonify({
+            "status": "rejected",
+            "failureInfo": result.get("failureInfo", "时间戳生成失败"),
+        }), 400
+
+    # 记录审计日志
+    content_preview = content[:100].replace("\n", " ")
+    audit_logger.log(
+        "TSA_TIMESTAMP", requester, "CREATE",
+        f"TEXT-{title or 'untitled'}", "SUCCESS",
+        f"文本时间戳签发: 算法={hash_algo_name}, 预览={content_preview}",
+        get_current_role()
+    )
+
+    return jsonify({
+        "status": "granted",
+        "statusString": "文本时间戳签发成功",
+        "contentInfo": {
+            "title": title or "(无标题)",
+            "contentLength": len(content),
+            "preview": content[:80] + ("..." if len(content) > 80 else ""),
+        },
+        "hashAlgorithm": hash_algo_name,
+        "hashValue": hash_value.hex(),
+        "serialNumber": result.get("serialNumber", ""),
+        "genTime": result.get("genTime", ""),
+        "tstToken": result.get("tstToken", ""),
+        "tstInfo": result.get("tstInfo", ""),
+        "driftSeconds": result.get("driftSeconds", 0),
+        "ntpAvailable": result.get("ntpAvailable", False),
+    })
+
+
+def _format_file_size(size_bytes):
+    """格式化文件大小显示"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
 @app.route("/api/tsa/verify", methods=["POST"])
@@ -1634,7 +2420,7 @@ def api_tsa_records():
         limit = 100
 
     try:
-        from database import transaction
+        from pki_demo.database import transaction
         with transaction() as conn:
             rows = conn.execute(
                 "SELECT * FROM tst_records ORDER BY id DESC LIMIT ?",
@@ -1665,7 +2451,7 @@ def _save_scenario_record(scenario_type, tst_serial, biz_id, biz_desc,
                           hash_value, created_by):
     """保存业务场景记录到数据库"""
     try:
-        from database import transaction
+        from pki_demo.database import transaction
         now_iso = datetime.now(timezone.utc).isoformat()
         with transaction() as conn:
             conn.execute(
@@ -1909,7 +2695,7 @@ def api_tsa_scenario_records():
         limit = 100
 
     try:
-        from database import transaction
+        from pki_demo.database import transaction
         query = "SELECT * FROM tsa_scenarios"
         params = []
         if scenario_type:
@@ -1963,6 +2749,17 @@ def serve_static(path):
 # ============================================================
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="PKI API Server")
+    parser.add_argument("--https", action="store_true",
+                        help="启用 HTTPS（原生 Flask SSL，无需 Nginx）")
+    parser.add_argument("--gen-ssl", action="store_true",
+                        help="自动生成 SSL 证书并启用 HTTPS")
+    parser.add_argument("--port", type=int, default=None,
+                        help="指定端口号（默认 HTTP:8080, HTTPS:8443）")
+    args = parser.parse_args()
+
     # 初始化：创建目录
     for d in ["certs", "keys", "csr", "crl", "export", "data", "backups"]:
         (PKI_DEMO_DIR / d).mkdir(exist_ok=True)
@@ -1981,8 +2778,53 @@ if __name__ == "__main__":
         print(f"[WARN] 环境变量未设置: {', '.join(missing)}")
         print("       建议运行 pki_demo/setup_env.bat 配置")
 
-    port = int(os.environ.get("PKI_API_PORT", 8080))
+    use_https = args.https or os.environ.get("PKI_USE_HTTPS", "").lower() in ("1", "true", "yes")
+    gen_ssl = args.gen_ssl or os.environ.get("PKI_GEN_SSL", "").lower() in ("1", "true", "yes")
+
+    # 端口
+    if args.port:
+        port = args.port
+    else:
+        port = int(os.environ.get("PKI_API_PORT", 8443 if use_https else 8080))
+
+    if gen_ssl:
+        print("[PKI API Server] 正在生成 SSL 证书...")
+        import subprocess
+        subprocess.run([sys.executable, str(BASE_DIR / "scripts" / "gen_flask_ssl_cert.py")],
+                       cwd=str(BASE_DIR))
+        use_https = True
+
+    ssl_cert = PKI_DEMO_DIR / "certs" / "flask_ssl_cert.pem"
+    ssl_key = PKI_DEMO_DIR / "certs" / "flask_ssl_key.pem"
+
+    if use_https:
+        if not ssl_cert.exists() or not ssl_key.exists():
+            print(f"[WARN] SSL 证书不存在，正在自动生成...")
+            import subprocess
+            subprocess.run([sys.executable, str(BASE_DIR / "scripts" / "gen_flask_ssl_cert.py")],
+                           cwd=str(BASE_DIR))
+
+        if ssl_cert.exists() and ssl_key.exists():
+            protocol = "https"
+            url_prefix = "https"
+            print(f"[PKI API Server] HTTPS 模式已启用")
+            print(f"[PKI API Server] 证书: {ssl_cert}")
+        else:
+            protocol = "http"
+            url_prefix = "http"
+            use_https = False
+            print(f"[WARN] SSL 证书生成失败，回退到 HTTP 模式")
+    else:
+        protocol = "http"
+        url_prefix = "http"
+
     print(f"[PKI API Server] 启动中...")
-    print(f"[PKI API Server] http://localhost:{port}")
-    print(f"[PKI API Server] 前端界面: http://localhost:{port}/")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    print(f"[PKI API Server] {url_prefix}://localhost:{port}")
+    print(f"[PKI API Server] 前端界面: {url_prefix}://localhost:{port}/")
+
+    if use_https and ssl_cert.exists() and ssl_key.exists():
+        context = (str(ssl_cert), str(ssl_key))
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False,
+                ssl_context=context)
+    else:
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)

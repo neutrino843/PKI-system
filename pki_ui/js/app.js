@@ -228,6 +228,72 @@ async function handleCertApply(e) {
     }
 }
 
+/* ----- 用户管理 ----- */
+async function renderUserManagement() {
+    const tbody = document.getElementById('userTableBody');
+    if (!tbody) return;
+
+    try {
+        const users = await API.getUsers();
+        if (users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5"><div class="hand-empty"><p>暂无用户</p></div></td></tr>';
+            return;
+        }
+        tbody.innerHTML = users.map(u => {
+            // 角色显示名称
+            const roleName = {ca_admin: '👑 CA管理员', ra_operator: '🔍 RA操作员',
+                              auditor: '📋 审计员', end_user: '👤 终端用户'}[u.role] || u.role;
+            const isMe = currentUser && currentUser.id === u.username;
+            const isAdmin = currentUser && currentUser.role === 'ca_admin';
+
+            let actions = '';
+            if (isAdmin && !isMe) {
+                if (u.role === 'end_user') {
+                    actions = `<button class="hand-btn hand-btn-sm hand-btn-accent" onclick="promoteUser('${u.username}')">提升为审核员</button>`;
+                } else if (u.role === 'ra_operator') {
+                    actions = `<button class="hand-btn hand-btn-sm hand-btn-secondary" onclick="demoteUser('${u.username}')">降级为普通用户</button>`;
+                } else {
+                    actions = '<span style="color:var(--color-text-light);font-size:0.85rem">不可操作</span>';
+                }
+            } else if (isMe) {
+                actions = '<span style="color:var(--color-text-light);font-size:0.85rem">当前用户</span>';
+            }
+
+            return `<tr>
+                <td>${u.username} ${isMe ? '<span style="color:var(--color-accent)">(我)</span>' : ''}</td>
+                <td>${u.name || '-'}</td>
+                <td><span class="hand-badge hand-badge-info">${roleName}</span></td>
+                <td><span class="hand-badge ${u.active !== false ? 'hand-badge-success' : 'hand-badge-danger'}">${u.active !== false ? '正常' : '已禁用'}</span></td>
+                <td>${actions || '-'}</td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5"><div class="hand-empty"><p>加载失败: ${err.message}</p></div></td></tr>`;
+    }
+}
+
+async function promoteUser(username) {
+    if (!confirm(`确定将用户 ${username} 提升为权限审核员吗？`)) return;
+    try {
+        const resp = await API.promoteReviewer(username);
+        UI.toast(resp.message || '提升成功', 'success');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message || '操作失败', 'error');
+    }
+}
+
+async function demoteUser(username) {
+    if (!confirm(`确定将用户 ${username} 降级为普通用户吗？`)) return;
+    try {
+        const resp = await API.demoteUser(username);
+        UI.toast(resp.message || '降级成功', 'success');
+        renderUserManagement();
+    } catch (err) {
+        UI.toast(err.message || '操作失败', 'error');
+    }
+}
+
 /* ----- RA审核 ----- */
 async function renderRARequests() {
     const tbody = document.getElementById('raTableBody');
@@ -387,6 +453,106 @@ async function generateCRL() {
         UI.toast(resp.message, 'success');
     } catch (err) {
         UI.toast(err.message, 'warning');
+    }
+}
+
+/* ----- OCSP 在线状态查询 ----- */
+async function renderOcspStats() {
+    const container = document.getElementById('ocspStatsContainer');
+    if (!container) return;
+    try {
+        const stats = await API.getOcspStats();
+        const items = [
+            { label: '总请求数', value: stats.total_requests, color: '#4A90D9' },
+            { label: '状态良好', value: stats.good_responses, color: '#52C41A' },
+            { label: '已吊销', value: stats.revoked_responses, color: '#FF4D4F' },
+            { label: '未知', value: stats.unknown_responses, color: '#FAAD14' },
+            { label: '缓存命中', value: stats.cache_hits, color: '#722ED1' },
+            { label: '缓存大小', value: stats.cacheSize, color: '#13C2C2' },
+        ];
+        container.innerHTML = items.map(i => `
+            <div style="background:#f9f9f9;border-radius:8px;padding:12px;text-align:center;border-left:3px solid ${i.color}">
+                <div style="font-size:1.6rem;font-weight:700;color:${i.color}">${i.value}</div>
+                <div style="font-size:0.8rem;color:#666;margin-top:4px">${i.label}</div>
+            </div>
+        `).join('');
+    } catch (err) {
+        container.innerHTML = `<div style="color:#999;font-size:0.85rem">统计加载失败: ${err.message}</div>`;
+    }
+}
+
+async function handleOcspQuery() {
+    const input = document.getElementById('ocspSerialInput');
+    const serial = input.value.trim();
+    if (!serial) {
+        UI.toast('请输入证书序列号', 'warning');
+        return;
+    }
+    try {
+        const result = await API.getOcspStatus(serial);
+        const resultDiv = document.getElementById('ocspQueryResult');
+
+        let statusHtml = '';
+        if (result.statusLabel === 'good') {
+            statusHtml = `<span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#E8F5E9;color:#2E7D32;font-weight:600">状态良好 (GOOD)</span>`;
+        } else if (result.statusLabel === 'revoked') {
+            statusHtml = `<span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#FFEBEE;color:#C62828;font-weight:600">已吊销 (REVOKED)</span>
+                <div style="margin-top:6px;font-size:0.85rem">
+                    <span style="color:#666">吊销时间:</span> ${result.revokedAt || '未知'}<br>
+                    <span style="color:#666">吊销原因:</span> ${result.reasonDesc || result.reason || '未知'}
+                </div>`;
+        } else {
+            statusHtml = `<span style="display:inline-block;padding:2px 10px;border-radius:4px;background:#FFF8E1;color:#F57F17;font-weight:600">未知证书 (UNKNOWN)</span>`;
+        }
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `
+            <div style="background:#f5f5f5;border-radius:8px;padding:14px">
+                <div style="font-size:0.85rem;color:#666;margin-bottom:6px">
+                    序列号: <code style="background:#e8e8e8;padding:2px 6px;border-radius:3px">${result.serial}</code>
+                    <span style="margin-left:16px">查询时间: ${new Date(result.checkedAt).toLocaleString('zh-CN')}</span>
+                </div>
+                <div>${statusHtml}</div>
+            </div>
+        `;
+    } catch (err) {
+        UI.toast('查询失败: ' + err.message, 'error');
+    }
+}
+
+async function handleOcspQueryByFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pem,.crt,.cer';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            // 先上传临时文件，再用路径查询
+            const uploadResp = await fetch('/api/ocsp/check-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: file.name })
+            });
+            // 由于浏览器无法直接获取本地路径，提示用户使用序列号查询
+            UI.toast('请复制证书序列号后使用"查询状态"按钮', 'info');
+        } catch (err) {
+            UI.toast('文件查询暂不支持，请输入序列号查询', 'info');
+        }
+    };
+    // 改为直接提示用户输入序列号就行（文件上传场景受限）
+    UI.toast('请在输入框中粘贴证书序列号进行查询', 'info');
+}
+
+async function handleOcspClearCache() {
+    try {
+        const resp = await API.clearOcspCache();
+        UI.toast(resp.message || 'OCSP缓存已清空', 'success');
+        renderOcspStats();
+    } catch (err) {
+        UI.toast('清空缓存失败: ' + err.message, 'error');
     }
 }
 
@@ -610,16 +776,133 @@ async function renderScenarioRecords() {
 
 // --- TSA 模态框事件绑定 ---
 
+// --- TSA 选项卡切换（三模式） ---
+function switchTstTab(mode) {
+    const hashMode = document.getElementById('tstHashMode');
+    const fileMode = document.getElementById('tstFileMode');
+    const textMode = document.getElementById('tstTextMode');
+    const tabHash = document.getElementById('tstTabHash');
+    const tabFile = document.getElementById('tstTabFile');
+    const tabText = document.getElementById('tstTabText');
+    const resultArea = document.getElementById('tstResultArea');
+    resultArea.style.display = 'none';
+
+    // 全部隐藏
+    hashMode.style.display = 'none';
+    fileMode.style.display = 'none';
+    textMode.style.display = 'none';
+    [tabHash, tabFile, tabText].forEach(t => {
+        t.style.borderBottomColor = 'transparent';
+        t.style.fontWeight = 'normal';
+    });
+    document.getElementById('tstHashValue').required = false;
+
+    if (mode === 'hash') {
+        hashMode.style.display = 'block';
+        tabHash.style.borderBottomColor = 'var(--color-primary)';
+        tabHash.style.fontWeight = 'bold';
+        document.getElementById('tstHashValue').required = true;
+    } else if (mode === 'file') {
+        fileMode.style.display = 'block';
+        tabFile.style.borderBottomColor = 'var(--color-primary)';
+        tabFile.style.fontWeight = 'bold';
+    } else if (mode === 'text') {
+        textMode.style.display = 'block';
+        tabText.style.borderBottomColor = 'var(--color-primary)';
+        tabText.style.fontWeight = 'bold';
+    }
+}
+
+// 文件预览 + 自动计算哈希
+async function previewTstFile() {
+    const fileInput = document.getElementById('tstFileInput');
+    const fileInfo = document.getElementById('tstFileInfo');
+    const fileHashDiv = document.getElementById('tstFileHash');
+    const fileHashInput = document.getElementById('tstFileHashValue');
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        fileInfo.style.display = 'none';
+        fileHashDiv.style.display = 'none';
+        return;
+    }
+
+    const file = fileInput.files[0];
+    const sizeStr = file.size < 1024 ? `${file.size} B` :
+        file.size < 1024 * 1024 ? `${(file.size / 1024).toFixed(1)} KB` :
+        `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+    fileInfo.style.display = 'block';
+    fileInfo.innerHTML = `📄 ${file.name} (${sizeStr})`;
+
+    // 自动计算哈希
+    const algo = document.getElementById('tstHashAlgorithm').value;
+    try {
+        const buffer = await file.arrayBuffer();
+        let hashHex;
+        if (algo === 'sm3') {
+            hashHex = '（SM3 将提交到后端计算）';
+        } else {
+            const hashName = algo === 'sha256' ? 'SHA-256' : algo === 'sha384' ? 'SHA-384' : 'SHA-512';
+            const hashBuffer = await crypto.subtle.digest(hashName, buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+        fileHashInput.value = hashHex;
+        fileHashDiv.style.display = 'block';
+    } catch (e) {
+        console.warn('前端哈希计算失败:', e);
+        fileHashInput.value = '（将在服务端计算）';
+        fileHashDiv.style.display = 'block';
+    }
+}
+
+// 文本模式实时预览
+function previewTstText() {
+    const content = document.getElementById('tstTextContent').value;
+    const preview = document.getElementById('tstTextPreview');
+    if (content.trim()) {
+        preview.style.display = 'block';
+        preview.innerHTML = `📝 内容长度: ${content.length} 字符 | 预览: ${content.substring(0, 60).replace(/\n/g, ' ')}${content.length > 60 ? '...' : ''}`;
+    } else {
+        preview.style.display = 'none';
+    }
+}
+
+// 绑定文本输入实时预览
+document.addEventListener('DOMContentLoaded', function() {
+    const textContent = document.getElementById('tstTextContent');
+    if (textContent) textContent.addEventListener('input', previewTstText);
+});
+
 function showTstRequestModal() {
     document.getElementById('tstResultArea').style.display = 'none';
     document.getElementById('tstRequestForm').reset();
+    document.getElementById('tstFileInfo').style.display = 'none';
+    document.getElementById('tstFileHash').style.display = 'none';
+    document.getElementById('tstTextPreview').style.display = 'none';
+    switchTstTab('hash');
     UI.showModal('modal-tst-request');
 }
 
-function showTstVerifyModal() {
+function showTstVerifyModal(token) {
     document.getElementById('tstVerifyResult').style.display = 'none';
     document.getElementById('tstVerifyForm').reset();
+    if (token) {
+        document.getElementById('tstTokenInput').value = token;
+    }
     UI.showModal('modal-tst-verify');
+}
+
+// 复制时间戳结果
+function copyTstResult() {
+    const resultContent = document.getElementById('tstResultContent');
+    if (!resultContent) return;
+    const text = resultContent.innerText || resultContent.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        UI.toast('已复制到剪贴板', 'success');
+    }).catch(() => {
+        UI.toast('复制失败，请手动选择复制', 'error');
+    });
 }
 
 function showContractSignModal() {
@@ -710,26 +993,84 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    // --- TSA 表单提交处理 ---
+    // --- TSA 表单提交处理（三模式） ---
     document.getElementById('tstRequestForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const hashValue = document.getElementById('tstHashValue').value.trim();
         const hashAlgo = document.getElementById('tstHashAlgorithm').value;
         const nonceInput = document.getElementById('tstNonce').value;
         const requester = document.getElementById('tstRequester').value.trim();
         const nonce = nonceInput ? parseInt(nonceInput) : null;
+
+        const isFileMode = document.getElementById('tstFileMode').style.display !== 'none';
+        const isTextMode = document.getElementById('tstTextMode').style.display !== 'none';
+
+        let result;
         try {
-            const result = await API.requestTimestamp(hashValue, hashAlgo, nonce, requester);
+            if (isFileMode) {
+                // 文件上传模式 — 上传 → 系统算哈希 → 签时间戳
+                const fileInput = document.getElementById('tstFileInput');
+                if (!fileInput.files || fileInput.files.length === 0) {
+                    UI.toast('请选择文件', 'error');
+                    return;
+                }
+                result = await API.requestFileTimestamp(fileInput.files[0], hashAlgo);
+            } else if (isTextMode) {
+                // 文本输入模式 — 输入文字 → 系统算哈希 → 签时间戳
+                const content = document.getElementById('tstTextContent').value.trim();
+                if (!content) {
+                    UI.toast('请输入文本内容', 'error');
+                    return;
+                }
+                const title = document.getElementById('tstTextTitle').value.trim();
+                result = await API.requestTextTimestamp(content, hashAlgo, title);
+            } else {
+                // 哈希输入模式 — 用户自己提供哈希 → 签时间戳
+                const hashValue = document.getElementById('tstHashValue').value.trim();
+                if (!hashValue) {
+                    UI.toast('请输入哈希值', 'error');
+                    return;
+                }
+                result = await API.requestTimestamp(hashValue, hashAlgo, nonce, requester);
+            }
+
+            // --- 结果展示（三模式统一） ---
             const area = document.getElementById('tstResultArea');
             area.style.display = 'block';
-            document.getElementById('tstResultContent').innerHTML = `
-                <p><strong>状态:</strong> ${result.statusString}</p>
-                <p><strong>序列号:</strong> ${result.serialNumber || '-'}</p>
-                <p><strong>生成时间:</strong> ${result.genTime || '-'}</p>
-                <p><strong>TST Token:</strong> <code style="font-size:0.75rem;word-break:break-all">${result.tstToken ? result.tstToken.substring(0, 64) + '...' : '-'}</code></p>
-                <p><strong>NTP可用:</strong> ${result.ntpAvailable ? '✅' : '❌'}</p>
-                <p><strong>时间偏差:</strong> ${(result.driftSeconds * 1000).toFixed(2)}ms</p>
+
+            let resultHtml = `<table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+                <tr><td style="padding:4px 8px;font-weight:bold">状态</td><td style="padding:4px 8px">${result.statusString || '✅ 已签发'}</td></tr>`;
+
+            // 内容来源信息
+            if (result.fileInfo) {
+                resultHtml += `<tr><td style="padding:4px 8px;font-weight:bold">文件</td><td style="padding:4px 8px">📄 ${result.fileInfo.fileName} (${result.fileInfo.fileSizeStr})</td></tr>`;
+            } else if (result.contentInfo) {
+                resultHtml += `<tr><td style="padding:4px 8px;font-weight:bold">内容</td><td style="padding:4px 8px">✏️ ${result.contentInfo.title} (${result.contentInfo.contentLength} 字符)</td></tr>`;
+                if (result.contentInfo.preview) {
+                    resultHtml += `<tr><td style="padding:4px 8px;font-weight:bold">预览</td><td style="padding:4px 8px;color:var(--color-text-light)">${result.contentInfo.preview}</td></tr>`;
+                }
+            }
+
+            resultHtml += `
+                <tr><td style="padding:4px 8px;font-weight:bold">序列号</td><td style="padding:4px 8px"><code style="font-size:0.75rem">${result.serialNumber || '-'}</code></td></tr>
+                <tr><td style="padding:4px 8px;font-weight:bold">签发时间</td><td style="padding:4px 8px">${result.genTime || '-'}</td></tr>
+                <tr><td style="padding:4px 8px;font-weight:bold">哈希算法</td><td style="padding:4px 8px">${result.hashAlgorithm?.toUpperCase() || hashAlgo.toUpperCase()}</td></tr>
+                <tr><td style="padding:4px 8px;font-weight:bold">哈希值</td><td style="padding:4px 8px"><code style="font-size:0.7rem;word-break:break-all">${result.hashValue || '-'}</code></td></tr>
+                <tr><td style="padding:4px 8px;font-weight:bold">NTP 时间源</td><td style="padding:4px 8px">${result.ntpAvailable ? '✅ 已同步' : '❌ 未同步（本地时间）'}</td></tr>
+                <tr><td style="padding:4px 8px;font-weight:bold">时间偏差</td><td style="padding:4px 8px">${(result.driftSeconds * 1000).toFixed(2)} ms</td></tr>
             `;
+
+            // 令牌预览
+            const tokenPreview = result.tstToken ? result.tstToken.substring(0, 48) + '...' : '';
+            if (tokenPreview) {
+                resultHtml += `<tr><td style="padding:4px 8px;font-weight:bold">令牌（预览）</td><td style="padding:4px 8px"><code style="font-size:0.65rem;word-break:break-all">${tokenPreview}</code></td></tr>`;
+            }
+
+            resultHtml += `</table>`;
+
+            // 存储令牌到隐藏元素，供验证按钮使用
+            resultHtml += `<div id="tstResultToken" style="display:none">${result.tstToken || ''}</div>`;
+
+            document.getElementById('tstResultContent').innerHTML = resultHtml;
             UI.toast('时间戳签发成功！', 'success');
             renderTsaRecords();
         } catch (err) {
@@ -747,18 +1088,30 @@ document.addEventListener('DOMContentLoaded', async function() {
             const area = document.getElementById('tstVerifyResult');
             area.style.display = 'block';
             if (result.valid) {
-                area.innerHTML = `
-                    <div class="hand-card" style="background:#f0fff0">
-                        <h4 style="color:#2e7d32">✅ 时间戳验证通过</h4>
-                        <p>${result.message}</p>
-                        ${result.tstInfo ? `
-                            <p><strong>哈希算法:</strong> ${result.tstInfo.hashAlgorithm || '-'}</p>
-                            <p><strong>序列号:</strong> ${result.tstInfo.serialNumber || '-'}</p>
-                            <p><strong>生成时间:</strong> ${result.tstInfo.genTime || '-'}</p>
-                        ` : ''}
-                        ${result.hashMatch !== null ? `<p><strong>哈希匹配:</strong> ${result.hashMatch ? '✅' : '❌'}</p>` : ''}
-                    </div>
-                `;
+                let infoHtml = `<div class="hand-card" style="background:#f0fff0">
+                    <h4 style="color:#2e7d32">✅ 时间戳验证通过</h4>
+                    <p>${result.message}</p>
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin-top:8px">`;
+                if (result.tstInfo) {
+                    infoHtml += `
+                        <tr><td style="padding:4px 8px;font-weight:bold">哈希算法</td><td style="padding:4px 8px">${result.tstInfo.hashAlgorithm || '-'}</td></tr>
+                        <tr><td style="padding:4px 8px;font-weight:bold">序列号</td><td style="padding:4px 8px"><code>${result.tstInfo.serialNumber || '-'}</code></td></tr>
+                        <tr><td style="padding:4px 8px;font-weight:bold">签发时间</td><td style="padding:4px 8px">${result.tstInfo.genTime || '-'}</td></tr>
+                        <tr><td style="padding:4px 8px;font-weight:bold">哈希值</td><td style="padding:4px 8px"><code style="font-size:0.7rem;word-break:break-all">${result.tstInfo.hashValue ? result.tstInfo.hashValue.substring(0, 48) + '...' : '-'}</code></td></tr>
+                    `;
+                }
+                if (result.hashMatch !== null) {
+                    infoHtml += `<tr><td style="padding:4px 8px;font-weight:bold;color:${result.hashMatch ? '#2e7d32' : '#c62828'}">哈希一致性</td><td style="padding:4px 8px">${result.hashMatch ? '✅ 与原始数据匹配' : '❌ 与原始数据不匹配'}</td></tr>`;
+                }
+                if (result.signerInfo) {
+                    infoHtml += `
+                        <tr><td style="padding:4px 8px;font-weight:bold">签名证书</td><td style="padding:4px 8px">${result.signerInfo.subject || '-'}</td></tr>
+                        <tr><td style="padding:4px 8px;font-weight:bold">证书有效期</td><td style="padding:4px 8px">${result.signerInfo.validFrom || '-'} ~ ${result.signerInfo.validTo || '-'}</td></tr>
+                        <tr><td style="padding:4px 8px;font-weight:bold">证书状态</td><td style="padding:4px 8px">${result.signerInfo.isValid ? '✅ 有效期内' : '❌ 已过期'}</td></tr>
+                    `;
+                }
+                infoHtml += `</table></div>`;
+                area.innerHTML = infoHtml;
             } else {
                 area.innerHTML = `<div class="hand-card" style="background:#fff0f0"><h4 style="color:#c62828">❌ 验证失败</h4><p>${result.message}</p></div>`;
             }

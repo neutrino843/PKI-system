@@ -28,10 +28,11 @@ DEFAULT_CONFIG = {
 
     # === 算法配置（可灵活切换） ===
     "algorithm": {
-        "signature_algorithm": "RSA",       # RSA / ECC / SM2（需额外库）
+        "signature_algorithm": "RSA",       # RSA / ECC / SM2
         "hash_algorithm": "SHA256",         # SHA256 / SHA384 / SHA512 / SM3
         "rsa_key_size": 2048,               # 2048 / 3072 / 4096
         "ecc_curve": "secp256r1",           # secp256r1 / secp384r1 / secp521r1
+        "sm2_curve": "sm2p256v1",           # SM2曲线（国密标准: secp256r1）
     },
 
     # === 证书策略配置 ===

@@ -1,7 +1,7 @@
 """
 ================================================================
   算法配置与文件安全模块（security_crypto.py）
-  功能：算法参数可配置化 + 文件完整性校验 + 安全删除
+  功能：算法参数可配置化 + 签名算法工厂 + SM2 密钥管理 + 文件完整性校验 + 安全删除
 ================================================================
 """
 
@@ -9,6 +9,8 @@ import os
 import hashlib
 from pathlib import Path
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
+from cryptography.hazmat.primitives import serialization
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -27,16 +29,30 @@ ALLOWED_RSA_KEY_SIZES = [2048, 3072, 4096]
 DEFAULT_RSA_KEY_SIZE = 2048
 DEFAULT_HASH = "SHA256"
 
+# SM2 使用 secp256r1 曲线（GB/T 32918 标准推荐参数）
+SM2_CURVE = ec.SECP256R1()
 
+# ECC 曲线映射
+ECC_CURVE_MAP = {
+    "secp256r1": ec.SECP256R1(),
+    "secp384r1": ec.SECP384R1(),
+    "secp521r1": ec.SECP521R1(),
+    "sm2p256v1": ec.SECP256R1(),  # SM2 曲线别名
+}
+
+
+# ============================================================
+# 哈希算法获取
+# ============================================================
 def get_hash_algorithm(name=None):
     """
     获取哈希算法实例
 
     参数：
-        name: 算法名称（SHA256/SHA384/SHA512），None则使用默认值
+        name: 算法名称（SHA256/SHA384/SHA512/SM3），None则使用默认值
 
     使用方式：
-        from security_crypto import get_hash_algorithm
+        from .security_crypto import get_hash_algorithm
         algo = get_hash_algorithm("SHA384")
         cert_builder.sign(private_key, algo, backend)
     """
@@ -45,21 +61,279 @@ def get_hash_algorithm(name=None):
     return HASH_ALGORITHM_MAP.get(name.upper(), hashes.SHA256())
 
 
+def get_signature_hash():
+    """
+    获取用于签名操作的哈希算法（CSR/证书签名）
+    
+    注意：cryptography 库不支持 SM3 用于 CSR/证书签名，
+    当配置为 SM3 时自动降级为 SHA256。
+    文档/业务数据的哈希不受影响（TSA 等仍可使用 SM3）。
+    """
+    algo_name = os.environ.get("PKI_HASH_ALGORITHM", DEFAULT_HASH)
+    if algo_name.upper() == "SM3":
+        return hashes.SHA256()
+    return get_hash_algorithm(algo_name)
+
+
 def get_rsa_key_size(size=None):
     """
     获取RSA密钥长度
-
-    参数：
-        size: 密钥长度（2048/3072/4096），None则使用环境变量或默认值
-
-    使用方式：
-        from security_crypto import get_rsa_key_size
-        key_size = get_rsa_key_size(4096)
     """
     if size is None:
         size_str = os.environ.get("PKI_RSA_KEY_SIZE", str(DEFAULT_RSA_KEY_SIZE))
         size = int(size_str)
     return size if size in ALLOWED_RSA_KEY_SIZES else DEFAULT_RSA_KEY_SIZE
+
+
+# ============================================================
+# 签名算法工厂
+# ============================================================
+SIGNATURE_ALGORITHMS = ("RSA", "ECC", "SM2")
+DEFAULT_SIGNATURE_ALGORITHM = "RSA"
+
+
+def get_signature_algorithm():
+    """
+    从环境变量或配置获取签名算法类型
+
+    环境变量: PKI_SIGNATURE_ALGORITHM (RSA/ECC/SM2)
+    默认值: RSA
+    """
+    algo = os.environ.get("PKI_SIGNATURE_ALGORITHM", DEFAULT_SIGNATURE_ALGORITHM).upper()
+    if algo not in SIGNATURE_ALGORITHMS:
+        algo = DEFAULT_SIGNATURE_ALGORITHM
+    return algo
+
+
+def generate_keypair(algorithm=None, key_size=None, curve_name=None):
+    """
+    根据签名算法生成密钥对（工厂方法）
+
+    参数：
+        algorithm: RSA / ECC / SM2，None 则从环境变量读取
+        key_size: RSA 密钥长度（仅 RSA 算法有效）
+        curve_name: EC 曲线名称（仅 ECC/SM2 算法有效）
+
+    返回：private_key 对象
+    """
+    if algorithm is None:
+        algorithm = get_signature_algorithm()
+
+    algorithm = algorithm.upper()
+
+    if algorithm == "RSA":
+        rsa_size = key_size or get_rsa_key_size()
+        return rsa.generate_private_key(65537, rsa_size)
+
+    elif algorithm == "ECC":
+        curve_name = curve_name or os.environ.get("PKI_ECC_CURVE", "secp256r1")
+        curve = ECC_CURVE_MAP.get(curve_name, ec.SECP256R1())
+        return ec.generate_private_key(curve)
+
+    elif algorithm == "SM2":
+        # SM2 使用固定的 secp256r1 曲线（国密标准）
+        return ec.generate_private_key(SM2_CURVE)
+
+    else:
+        raise ValueError(f"不支持的签名算法: {algorithm}")
+
+
+def sign_data(private_key, data, hash_algorithm=None, algorithm=None):
+    """
+    使用私钥对数据进行签名（算法无关）
+
+    参数：
+        private_key: 私钥对象
+        data: 要签名的数据（bytes）
+        hash_algorithm: 哈希算法实例，None 则使用默认
+        algorithm: RSA/ECC/SM2，None 则自动推断
+
+    返回：签名值（bytes）
+    """
+    if hash_algorithm is None:
+        hash_algorithm = get_hash_algorithm()
+
+    # 自动推断算法类型
+    if algorithm is None:
+        if isinstance(private_key, rsa.RSAPrivateKey):
+            algorithm = "RSA"
+        elif isinstance(private_key, ec.EllipticCurvePrivateKey):
+            algorithm = "ECC"  # SM2 也是 ECC 子类
+        else:
+            algorithm = "RSA"
+
+    algorithm = algorithm.upper()
+
+    if algorithm == "RSA":
+        return private_key.sign(
+            data,
+            padding.PSS(
+                mgf=padding.MGF1(hash_algorithm),
+                salt_length=padding.PSS.MAX_LENGTH,
+            ),
+            hash_algorithm,
+        )
+    elif algorithm in ("ECC", "SM2"):
+        return private_key.sign(data, ec.ECDSA(hash_algorithm))
+    else:
+        raise ValueError(f"不支持的签名算法: {algorithm}")
+
+
+def verify_signature(public_key, signature, data, hash_algorithm=None, algorithm=None):
+    """
+    使用公钥验证签名（算法无关）
+
+    参数：
+        public_key: 公钥对象
+        signature: 签名值
+        data: 原始数据
+        hash_algorithm: 哈希算法实例
+        algorithm: RSA/ECC/SM2，None 则自动推断
+
+    返回：True/False
+    """
+    if hash_algorithm is None:
+        hash_algorithm = get_hash_algorithm()
+
+    if algorithm is None:
+        if isinstance(public_key, rsa.RSAPublicKey):
+            algorithm = "RSA"
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            algorithm = "ECC"
+        else:
+            algorithm = "RSA"
+
+    algorithm = algorithm.upper()
+
+    try:
+        if algorithm == "RSA":
+            public_key.verify(
+                signature,
+                data,
+                padding.PSS(
+                    mgf=padding.MGF1(hash_algorithm),
+                    salt_length=padding.PSS.MAX_LENGTH,
+                ),
+                hash_algorithm,
+            )
+        elif algorithm in ("ECC", "SM2"):
+            public_key.verify(signature, data, ec.ECDSA(hash_algorithm))
+        else:
+            raise ValueError(f"不支持的签名算法: {algorithm}")
+        return True
+    except Exception:
+        return False
+
+
+def get_ecc_curve():
+    """获取 ECC 曲线配置"""
+    curve_name = os.environ.get("PKI_ECC_CURVE", "secp256r1")
+    return ECC_CURVE_MAP.get(curve_name, ec.SECP256R1())
+
+
+def is_sm2_key(private_key):
+    """判断私钥是否是 SM2 密钥"""
+    if not isinstance(private_key, ec.EllipticCurvePrivateKey):
+        return False
+    curve = private_key.curve
+    # SM2 使用 secp256r1 曲线
+    return isinstance(curve, ec.SECP256R1)
+
+
+# ============================================================
+# SM2 密钥管理器
+# ============================================================
+class SM2KeyManager:
+    """
+    SM2 国密密钥管理器
+
+    基于 cryptography 库的原生 SM2 支持（>=42.0.0）
+    SM2 使用 secp256r1 曲线 + ECDSA 签名算法
+    """
+
+    @staticmethod
+    def generate_keypair():
+        """生成 SM2 密钥对"""
+        return ec.generate_private_key(SM2_CURVE)
+
+    @staticmethod
+    def save_private_key(private_key, filepath, password):
+        """
+        加密保存 SM2 私钥（PKCS#8 格式）
+
+        参数：
+            private_key: 私钥对象
+            filepath: 保存路径
+            password: 加密密码（bytes）
+        """
+        pem_data = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(password),
+        )
+        with open(filepath, "wb") as f:
+            f.write(pem_data)
+
+    @staticmethod
+    def save_public_key(public_key, filepath):
+        """
+        保存 SM2 公钥（SubjectPublicKeyInfo 格式）
+        """
+        pem_data = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        with open(filepath, "wb") as f:
+            f.write(pem_data)
+
+    @staticmethod
+    def load_private_key(filepath, password):
+        """
+        加载加密的 SM2 私钥
+        """
+        with open(filepath, "rb") as f:
+            return serialization.load_pem_private_key(f.read(), password)
+
+    @staticmethod
+    def load_public_key(filepath):
+        """
+        加载 SM2 公钥
+        """
+        with open(filepath, "rb") as f:
+            return serialization.load_pem_public_key(f.read())
+
+    @staticmethod
+    def sign(private_key, data, hash_algorithm=None):
+        """
+        SM2 签名（使用 ECDSA + 指定哈希算法）
+        """
+        if hash_algorithm is None:
+            hash_algorithm = get_hash_algorithm()
+        return private_key.sign(data, ec.ECDSA(hash_algorithm))
+
+    @staticmethod
+    def verify(public_key, signature, data, hash_algorithm=None):
+        """
+        SM2 验签
+        """
+        if hash_algorithm is None:
+            hash_algorithm = get_hash_algorithm()
+        try:
+            public_key.verify(signature, data, ec.ECDSA(hash_algorithm))
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def get_curve_info():
+        """获取 SM2 曲线信息"""
+        return {
+            "name": "sm2p256v1",
+            "standard": "GB/T 32918.5-2017",
+            "openssl_name": "SM2",
+            "key_size": 256,
+            "signature_algorithm": "SM2-with-SM3 / SM2-with-SHA256",
+        }
 
 
 # ============================================================
@@ -178,7 +452,7 @@ def secure_delete(filepath, passes=3):
         passes: 覆写次数（默认3次，满足大多数安全要求）
 
     使用方式：
-        from security_crypto import secure_delete
+        from .security_crypto import secure_delete
         secure_delete("sensitive_file.pem")
     """
     if not os.path.exists(filepath):

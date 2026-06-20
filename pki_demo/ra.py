@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from database import transaction
+from .database import transaction
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -50,7 +50,7 @@ class RAManager:
         """
         提交证书申请（用户操作）
         """
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 existing = conn.execute(
@@ -85,7 +85,7 @@ class RAManager:
         """
         初审证书申请（RA操作员操作）- 四眼原则第1步
         """
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -120,7 +120,7 @@ class RAManager:
         """
         二审批准证书申请（四眼原则第2步，需与初审人不同）
         """
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -168,7 +168,7 @@ class RAManager:
         """
         拒绝证书申请（RA操作员操作）
         """
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 row = conn.execute(
@@ -204,7 +204,7 @@ class RAManager:
 
     def get_pending_list(self):
         """获取待审核列表"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 rows = conn.execute(
@@ -222,7 +222,7 @@ class RAManager:
 
     def get_approved_list(self):
         """获取已批准列表"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 rows = conn.execute(
@@ -240,7 +240,7 @@ class RAManager:
 
     def mark_issued(self, csr_id):
         """标记已签发"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 now = datetime.now().isoformat()
@@ -255,7 +255,7 @@ class RAManager:
 
     def get_statistics(self):
         """获取审核统计信息"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 pending = conn.execute(
@@ -305,14 +305,14 @@ ra_manager = RAManager()
 # ============================================================
 if __name__ == "__main__":
     print("=== RA审核模块测试 ===\n")
-    from database import init_database
+    from .database import init_database
     init_database()
 
     ra = RAManager()
 
     print("测试1：用户提交证书申请")
-    success, msg = ra.submit_csr("CSR-001", "张三", "研发部",
-                                  "csr/user_张三_csr.pem", "张三")
+    success, msg = ra.submit_csr("CSR-001", "User1", "研发部",
+                                  "csr/user_User1_csr.pem", "User1")
     print(f"  {'[OK]' if success else '[FAIL]'} {msg}")
 
     print("\n测试2：待审核列表")

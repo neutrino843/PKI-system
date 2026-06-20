@@ -21,17 +21,20 @@ sys.path.insert(0, str(PKI_DEMO_DIR))
 from config import CFG
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import pkcs12
+
+# 导入算法工厂
+sys.path.insert(0, str(PKI_DEMO_DIR))
+from pki_demo.security_crypto import generate_keypair, get_signature_hash, get_signature_algorithm
 
 # ============================================================
 # 配置
 # ============================================================
 CN_NAME = "PKI Admin"           # 证书通用名称（可通过命令行参数修改）
-P12_PASSWORD = os.environ.get("PKI_P12_EXPORT_PASSWORD", "pki123456")  # .p12导出密码
-NGINX_DIR = os.environ.get("PKI_NGINX_DIR", r"D:\nginx-1.30.1")        # Nginx目录
+P12_PASSWORD = os.environ.get("PKI_P12_EXPORT_PASSWORD", "CHANGE_ME_IN_PRODUCTION")  # .p12导出密码
+NGINX_DIR = os.environ.get("PKI_NGINX_DIR", r"C:\path\to\nginx")        # Nginx目录（请修改为实际路径）
 
 print("=" * 60)
 print("  mTLS 客户端证书签发工具")
@@ -50,7 +53,7 @@ if not ca_cert_path.exists():
 
 ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
 if not ca_pwd:
-    ca_pwd = os.environ.get("PKI_CA_KEY_PASSWORD", "CHANGE_CA_PASSWORD_HERE").encode()
+    ca_pwd = os.environ.get("PKI_CA_KEY_PASSWORD", "CHANGE_ME_IN_PRODUCTION").encode()
 
 with open(ca_cert_path, "rb") as f:
     ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
@@ -63,10 +66,10 @@ print(f"  CA: {ca_cert.subject}")
 # ============================================================
 # 2. 生成客户端密钥
 # ============================================================
-print("\n[2/5] 生成客户端 RSA 2048 密钥对...")
-client_key = rsa.generate_private_key(
-    public_exponent=65537, key_size=2048, backend=default_backend()
-)
+print("\n[2/5] 生成客户端密钥对...")
+algo = get_signature_algorithm()
+print(f"  算法: {algo}")
+client_key = generate_keypair()
 
 # 保存私钥（加密）
 key_path = PKI_DEMO_DIR / "keys" / "client_admin_private.pem"
@@ -116,7 +119,7 @@ client_cert = (
         ),
         critical=False,
     )
-    .sign(ca_key, hashes.SHA256(), default_backend())
+    .sign(ca_key, get_signature_hash(), default_backend())
 )
 
 cert_path = PKI_DEMO_DIR / "certs" / "client_admin_cert.pem"
@@ -193,17 +196,17 @@ print("\n  重载 Nginx...")
 try:
     result = subprocess.run(
         ["nginx", "-s", "reload"],
-        cwd=r"D:\nginx-1.30.1",
+        cwd=NGINX_DIR,
         capture_output=True, text=True, timeout=10
     )
     if result.returncode == 0:
         print("  Nginx: 重载成功")
     else:
         print(f"  Nginx: 重载可能失败 ({result.stderr.strip()})")
-        print("  可以手动执行: cd D:\\nginx-1.30.1 && nginx -s reload")
+        print(f"  可以手动执行: cd {NGINX_DIR} && nginx -s reload")
 except Exception as e:
     print(f"  Nginx: 重载异常: {e}")
-    print("  请手动执行: cd D:\\nginx-1.30.1 && nginx -s reload")
+    print(f"  请手动执行: cd {NGINX_DIR} && nginx -s reload")
 
 # ============================================================
 # 完成

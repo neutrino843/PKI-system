@@ -4,9 +4,20 @@
 # ========================
 # 文档与评估报告（含内部信息）
 # ========================
+PKI体系综述.pdf
 *.md
-*.pdf
+!README.md
+!DEPLOY.md
+!.gitignore
 .trae/
+
+# ========================
+# 诊断与内部脚本（含硬编码密码/路径）
+# ========================
+_diagnose.py
+scripts/check_ca_pwd.py
+scripts/export_maomao_p12.py
+scripts/verify_user_cert.py
 
 # ========================
 # 运行时数据（含审计日志、用户数据库）

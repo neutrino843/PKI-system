@@ -20,7 +20,7 @@ from cryptography.x509 import SubjectAlternativeName, DNSName, RFC822Name
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
-from security_crypto import get_hash_algorithm
+from .security_crypto import get_signature_hash, get_signature_algorithm
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -28,10 +28,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ============================================================
 # 辅助功能1：加载CA的私钥
 # ============================================================
-def load_ca_private_key(filepath, password=b"pki_demo_password"):
+def load_ca_private_key(filepath, password=None):
     """
     加载CA的加密私钥
     """
+    if password is None:
+        password = os.environ.get("PKI_CA_KEY_PASSWORD", "DEV_ONLY_change_me").encode()
     print("\n[正在加载CA私钥（发证机关印章）...]")
     with open(filepath, 'rb') as f:
         pem_data = f.read()
@@ -163,7 +165,7 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
     # CA用私钥签名——"盖钢印"
     user_cert = cert_builder.sign(
         ca_private_key,
-        get_hash_algorithm(),
+        get_signature_hash(),
         default_backend()
     )
 
@@ -172,7 +174,7 @@ def sign_user_certificate(ca_private_key, ca_cert, csr,
     print(f"   ├─ 序列号：{user_cert.serial_number}")
     print(f"   ├─ 颁发者：{ca_cert.subject.rfc4514_string()}")
     print(f"   ├─ 有效期至：{valid_until.strftime('%Y-%m-%d')}")
-    print(f"   └─ 签名算法：SHA-256 + RSA")
+    print(f"   └─ 签名算法：{type(get_signature_hash()).__name__.replace('_','-')} + {get_signature_algorithm()}")
 
     return user_cert
 
@@ -251,7 +253,7 @@ def main():
     ca_cert = load_ca_certificate(ca_cert_path)
 
     # 步骤2：逐个处理用户的CSR
-    users = ["张三", "李四"]
+    users = ["User1", "User2"]
 
     for username in users:
         print(f"\n{'='*40}")
@@ -294,8 +296,8 @@ def main():
     print(f"\n{'='*60}")
     print(f"  [OK] 单元4完成！用户证书已签发。")
     print(f"  [OK] 证书文件目录：certs/")
-    print(f"  ├─ user_张三_cert.pem")
-    print(f"  └─ user_李四_cert.pem")
+    print(f"  ├─ user_User1_cert.pem")
+    print(f"  └─ user_User2_cert.pem")
     print(f"  [OK] 信任链：根CA → 用户证书")
     print("=" * 60)
 

@@ -15,21 +15,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
 # 安全模块导入
-from config import CFG
-from auth import (_session_manager as auth_sm, Permission, Role,
-                  ROLE_PERMISSIONS, UserManager, require_permission,
-                  AuthorizationError)
-from audit import audit_logger
-from ra import ra_manager
-from security_crl import SecureRevokedList
-from security_crypto import get_hash_algorithm, get_rsa_key_size, FileIntegrityChecker
-from backup import BackupManager
-from inter_ca import generate_intermediate_ca
-from cert_expiry import CertExpiryChecker
+from .config import CFG
+from .auth import (_session_manager as auth_sm, Permission, Role,
+                   ROLE_PERMISSIONS, UserManager, require_permission,
+                   AuthorizationError)
+from .audit import audit_logger
+from .ra import ra_manager
+from .security_crl import SecureRevokedList
+from .security_crypto import get_signature_hash, generate_keypair, get_signature_algorithm, FileIntegrityChecker
+from .backup import BackupManager
+from .inter_ca import generate_intermediate_ca
+from .cert_expiry import CertExpiryChecker
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -169,14 +168,12 @@ def _create_root_ca():
     org = get_input("组织名称", "PKI演示系统")
     years = get_input("证书有效期(年)", "10")
 
-    print("\n  正在生成根CA(2048位RSA密钥对)...")
+    print("\n  正在生成密钥对...")
 
-    # 生成密钥对
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=get_rsa_key_size(),
-        backend=default_backend()
-    )
+    # 生成密钥对（根据配置自动选择 RSA/ECC/SM2）
+    algo = get_signature_algorithm()
+    private_key = generate_keypair()
+    print(f"  算法: {algo}")
 
     # 保存私钥
     ca_pwd = CFG.get_password("CA_KEY_PASSWORD")
@@ -311,14 +308,13 @@ def module_b_user_cert():
 def _apply_new_cert():
     print_header("申请新证书(填写身份证申请表)")
 
-    name = get_input("用户名", "张三")
+    name = get_input("用户名", "User1")
     org = get_input("所属部门", "研发部")
 
     print(f"\n  正在为 '{name}' 生成密钥和CSR...")
 
-    private_key = rsa.generate_private_key(
-        public_exponent=65537, key_size=get_rsa_key_size(), backend=default_backend()
-    )
+    algo = get_signature_algorithm()
+    private_key = generate_keypair()
 
     user_pwd = CFG.get_password("USER_KEY_PASSWORD")
     if not user_pwd:
@@ -715,7 +711,7 @@ def _generate_crl():
         critical=False,
     )
 
-    crl = crl_builder.sign(ca_key, get_hash_algorithm(), default_backend())
+    crl = crl_builder.sign(ca_key, get_signature_hash(), default_backend())
 
     crl_path = BASE_DIR / "crl" / "ca_crl.pem"
     with open(crl_path, "wb") as f:

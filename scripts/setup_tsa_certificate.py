@@ -24,10 +24,12 @@ from audit import audit_logger, EVENT_TSA_CERT_ISSUE
 
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.x509 import SubjectAlternativeName, DNSName
+
+# 导入算法工厂
+from security_crypto import generate_keypair, get_hash_algorithm, get_signature_algorithm
 
 
 def issue_tsa_certificate(common_name="PKI TSA Server",
@@ -75,10 +77,9 @@ def issue_tsa_certificate(common_name="PKI TSA Server",
             f.read(), password=ca_pwd, backend=default_backend()
         )
 
-    print(f"[2/5] 生成 TSA 密钥对 (RSA {key_size})")
-    tsa_key = rsa.generate_private_key(
-        public_exponent=65537, key_size=key_size, backend=default_backend()
-    )
+    algo = get_signature_algorithm()
+    print(f"[2/5] 生成 TSA 密钥对 ({algo})")
+    tsa_key = generate_keypair()
 
     print(f"[3/5] 保存 TSA 私钥")
     key_path = PKI_DEMO_DIR / "keys" / "tsa_private.pem"
@@ -93,11 +94,7 @@ def issue_tsa_certificate(common_name="PKI TSA Server",
 
     print(f"[4/5] 构建 TSA 证书 (有效期: {validity_days}天)")
     now = datetime.now(timezone.utc)
-    hash_instance = hashes.SHA256()
-    if hash_algo.upper() == "SHA384":
-        hash_instance = hashes.SHA384()
-    elif hash_algo.upper() == "SHA512":
-        hash_instance = hashes.SHA512()
+    hash_instance = get_hash_algorithm(hash_algo)
 
     tsa_cert = (
         x509.CertificateBuilder()

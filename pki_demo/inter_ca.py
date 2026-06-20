@@ -11,10 +11,9 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
-from config import CFG
-from security_crypto import get_hash_algorithm, get_rsa_key_size
+from .config import CFG
+from .security_crypto import get_signature_hash, generate_keypair
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -42,12 +41,8 @@ def generate_intermediate_ca():
     with open(ca_cert_path, "rb") as f:
         ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
-    # 生成中间CA密钥对
-    inter_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=get_rsa_key_size(),
-        backend=default_backend()
-    )
+    # 生成中间CA密钥对（根据配置自动选择 RSA/ECC/SM2）
+    inter_key = generate_keypair()
 
     # 保存中间CA私钥
     inter_pwd = CFG.get_password("CA_KEY_PASSWORD")
@@ -84,7 +79,7 @@ def generate_intermediate_ca():
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(ca_key, get_hash_algorithm(), default_backend())
+        .sign(ca_key, get_signature_hash(), default_backend())
     )
 
     with open(inter_cert_path, "wb") as f:

@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.backends import default_backend
 
 try:
-    from config import CFG
+    from .config import CFG
 except ImportError:
     CFG = None
 
@@ -146,7 +146,7 @@ def main():
         ca_cert = x509.load_pem_x509_certificate(f.read(), default_backend())
 
     # 处理每个用户
-    users = ["张三", "李四"]
+    users = ["User1", "User2"]
 
     for username in users:
         print(f"\n{'='*40}")
@@ -159,7 +159,7 @@ def main():
             key_data = f.read()
         private_key = serialization.load_pem_private_key(
             key_data,
-            password=b"user_password",
+            password=b"DEV_ONLY_change_me",
             backend=default_backend()
         )
         print(f"   [OK] 加载用户私钥成功")
@@ -178,7 +178,7 @@ def main():
             private_key=private_key,
             user_cert=user_cert,
             ca_cert=ca_cert,
-            password=b"p12_password_123",
+            password=b"DEV_ONLY_change_me",
             friendly_name=username
         )
 
@@ -187,14 +187,14 @@ def main():
         save_pkcs12(p12_data, p12_path)
 
         # 验证导出的文件
-        p12_pwd = (CFG.get_password("P12_EXPORT_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"p12_password_123"
+        p12_pwd = (CFG.get_password("P12_EXPORT_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"DEV_ONLY_change_me"
         load_and_verify_pkcs12(p12_path, password=p12_pwd)
 
     print(f"\n{'='*60}")
     print(f"  [OK] 单元5完成！PKCS#12证书已导出。")
     print(f"  [OK] 导出目录：export/")
-    print(f"  ├─ user_张三.p12（密码：p12_password_123）")
-    print(f"  └─ user_李四.p12（密码：p12_password_123）")
+    print(f"  ├─ user_User1.p12（密码：DEV_ONLY_change_me）")
+    print(f"  └─ user_User2.p12（密码：DEV_ONLY_change_me）")
     print(f"  [INFO] 提示：这些.p12文件可以导入到浏览器或系统中使用")
     print("=" * 60)
 

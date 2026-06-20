@@ -1,10 +1,14 @@
 """
-生成自签名localhost TLS证书（自签证书）
-用于 Flask HTTPS 原生支持 或 Nginx HTTPS 反向代理
-（不依赖PKI系统的CA）
+生成 Flask 原生 HTTPS SSL 证书
+替代原来的 Nginx 代理方案，让 Flask 直接支持 HTTPS
 """
+import sys
+import os
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.x509 import SubjectAlternativeName, DNSName, IPAddress
@@ -12,26 +16,33 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from ipaddress import ip_address
 
-# 导入算法工厂
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "pki_demo"))
-from security_crypto import generate_keypair, get_signature_hash, get_signature_algorithm
+from pki_demo.security_crypto import generate_keypair, get_signature_hash
 
 BASE_DIR = Path(__file__).parent.parent
-NGINX_CERT_DIR = BASE_DIR / "nginx" / "certs"
+SSL_DIR = BASE_DIR / "pki_demo" / "certs"
+
 
 def main():
     print("=" * 60)
-    print("  生成自签名localhost TLS证书")
+    print("  生成 Flask HTTPS SSL 证书")
     print("=" * 60)
 
-    NGINX_CERT_DIR.mkdir(parents=True, exist_ok=True)
+    cert_path = SSL_DIR / "flask_ssl_cert.pem"
+    key_path = SSL_DIR / "flask_ssl_key.pem"
+
+    # 检查是否已存在
+    if cert_path.exists() and key_path.exists():
+        print("\n[OK] SSL证书已存在，跳过生成")
+        print(f"  证书: {cert_path}")
+        print(f"  密钥: {key_path}")
+        return
+
+    SSL_DIR.mkdir(parents=True, exist_ok=True)
 
     # 1. 生成密钥对
     print("\n[1/3] 生成密钥对...")
-    algo = get_signature_algorithm()
-    print(f"  算法: {algo}")
     key = generate_keypair()
+    print("  [OK] 密钥对生成完成")
 
     # 2. 创建自签证书
     print("[2/3] 签发自签名证书...")
@@ -48,12 +59,12 @@ def main():
         x509.CertificateBuilder()
         .subject_name(x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PKI Local Development"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PKI System"),
             x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
         ]))
         .issuer_name(x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PKI Local Development"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PKI System"),
             x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
         ]))
         .public_key(key.public_key())
@@ -75,8 +86,7 @@ def main():
     # 3. 保存文件
     print("[3/3] 保存证书文件...")
 
-    # 私钥（Nginx需要未加密的PEM格式）
-    key_path = NGINX_CERT_DIR / "pki_server_key.pem"
+    # 私钥（未加密，供Flask SSL上下文使用）
     with open(key_path, "wb") as f:
         f.write(key.private_bytes(
             encoding=serialization.Encoding.PEM,
@@ -86,33 +96,26 @@ def main():
     print(f"  [OK] 私钥: {key_path}")
 
     # 证书
-    cert_path = NGINX_CERT_DIR / "pki_server_cert.pem"
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     print(f"  [OK] 证书: {cert_path}")
 
     print(f"""
 {'=' * 60}
-  自签名证书生成完成！
+  Flask HTTPS SSL 证书生成完成！
 {'=' * 60}
   证书信息:
     CN: localhost
     SAN: localhost, 127.0.0.1, *.localhost, ::1
     有效期: 5年
-    类型: 自签名 (Self-Signed)
 
   使用方式:
-    [方式A] Flask HTTPS 原生支持:
-      python api_server.py --https
-
-    [方式B] Nginx 反向代理:
-      将证书配置到 Nginx ssl_certificate 指令
-
-  注意: 浏览器首次访问会提示"您的连接不是私密连接"，
-        这是因为证书是自签名的，未被公开CA信任。
-        点击"高级" → "继续前往localhost" 即可。
+    python api_server.py --https       # 使用现有证书
+    python api_server.py --https --gen-ssl   # 自动生成证书并启动
+    python start_dev.py --https        # 通过启动脚本使用
 {'=' * 60}
 """)
+
 
 if __name__ == "__main__":
     main()

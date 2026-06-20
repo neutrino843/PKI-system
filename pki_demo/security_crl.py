@@ -13,7 +13,7 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from database import transaction
+from .database import transaction
 
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -61,7 +61,7 @@ class SecureRevokedList:
         参数：
             revoked_list: 吊销信息列表
         """
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 conn.execute("DELETE FROM crl_revoked")
@@ -89,7 +89,7 @@ class SecureRevokedList:
             reason: 吊销原因代码
             reason_desc: 吊销原因描述
         """
-        from database import get_connection
+        from .database import get_connection
         serial_str = str(serial_number)
 
         try:
@@ -120,7 +120,7 @@ class SecureRevokedList:
 
     def is_revoked(self, serial_number):
         """检查证书是否已被吊销"""
-        from database import get_connection
+        from .database import get_connection
         serial_str = str(serial_number)
         try:
             with transaction() as conn:
@@ -133,7 +133,7 @@ class SecureRevokedList:
 
     def get_revoked_list(self):
         """获取吊销列表"""
-        from database import get_connection
+        from .database import get_connection
         try:
             with transaction() as conn:
                 rows = conn.execute(
@@ -176,7 +176,7 @@ secure_crl = SecureRevokedList()
 # ============================================================
 if __name__ == "__main__":
     print("=== CRL安全加固模块测试 ===\n")
-    from database import init_database
+    from .database import init_database
     init_database()
 
     s = SecureRevokedList()

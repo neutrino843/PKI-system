@@ -14,14 +14,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
 
 # 若config模块可用则导入（单元测试可使用默认密码）
 try:
-    from config import CFG
+    from .config import CFG
 except ImportError:
     CFG = None
+
+# 导入算法工厂
+try:
+    from .security_crypto import generate_keypair, get_signature_hash, get_signature_algorithm
+except ImportError:
+    from security_crypto import generate_keypair, get_signature_hash, get_signature_algorithm
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,17 +36,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ============================================================
 def generate_key_pair(key_size=2048):
     """
-    生成RSA密钥对
+    生成密钥对（根据配置自动选择 RSA/ECC/SM2）
     """
-    print("\n[正在为用户生成RSA密钥对（2048位）...]")
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=key_size,
-        backend=default_backend()
-    )
-    print("   [OK] 用户密钥对生成成功！")
-    print("   ├─ 私钥（钥匙）：已生成，仅用户自己持有")
-    print("   └─ 公钥（锁）：已提取，将用于生成证书请求")
+    algo = get_signature_algorithm()
+    print(f"\n[正在为用户生成 {algo} 密钥对...]")
+    private_key = generate_keypair()
+    print(f"   [OK] 用户密钥对生成成功！")
+    print(f"   ├─ 算法：{algo}")
+    print(f"   ├─ 私钥（钥匙）：已生成，仅用户自己持有")
+    print(f"   └─ 公钥（锁）：已提取，将用于生成证书请求")
     return private_key
 
 
@@ -89,13 +92,15 @@ def generate_csr(private_key, common_name, country="CN",
     )
 
     # 用私钥在申请表上签名——证明是本人提交
-    csr = csr_builder.sign(private_key, hashes.SHA256(), default_backend())
+    algo_name = get_signature_algorithm()
+    hash_algo = get_signature_hash()
+    csr = csr_builder.sign(private_key, hash_algo, default_backend())
 
     print(f"   [OK] CSR生成成功！")
     print(f"   ├─ 申请人：{common_name}")
     print(f"   ├─ 国家：{country}")
     print(f"   ├─ 组织：{organization or '未指定'}")
-    print(f"   ├─ 签名算法：SHA-256 + RSA")
+    print(f"   ├─ 签名算法：{type(hash_algo).__name__.replace('_','-')} + {algo_name}")
     print(f"   └─ CSR已用私钥签名，证明是本人申请")
 
     return csr
@@ -157,8 +162,8 @@ def main():
 
     # 模拟两个用户
     users = [
-        {"name": "张三", "org": "研发部", "email": "zhangsan@demo.com"},
-        {"name": "李四", "org": "财务部", "email": "lisi@demo.com"},
+        {"name": "User1", "org": "研发部", "email": "user1@example.com"},
+        {"name": "User2", "org": "财务部", "email": "user2@example.com"},
     ]
 
     for user in users:
@@ -175,7 +180,7 @@ def main():
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.BestAvailableEncryption(
-                (CFG.get_password("USER_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"user_password"
+                (CFG.get_password("USER_KEY_PASSWORD") if hasattr(CFG, 'get_password') else None) or b"DEV_ONLY_change_me"
             )
         )
         with open(key_path, 'wb') as f:

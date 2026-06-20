@@ -1,6 +1,6 @@
 """
 重新初始化PKI系统CA + 为localhost签发TLS服务器证书
-完整流程：根CA → 中间CA → localhost服务器证书 → 配置Nginx
+完整流程：根CA → 中间CA → localhost服务器证书 → 配置 Nginx/Flask HTTPS
 """
 import sys
 import os
@@ -13,17 +13,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "pki_demo"))
 from cryptography import x509
 from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.x509 import SubjectAlternativeName, DNSName, IPAddress
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from ipaddress import ip_address
+
+# 导入算法工厂
+from pki_demo.security_crypto import generate_keypair, get_signature_hash, get_signature_algorithm
 
 BASE_DIR = Path(__file__).parent.parent
 PKI_DEMO = BASE_DIR / "pki_demo"
 NGINX_CERT_DIR = BASE_DIR / "nginx" / "certs"
 
 # 从环境变量读取CA密码，避免硬编码
-CA_PWD = os.environ.get("PKI_CA_KEY_PASSWORD", "CHANGE_CA_PASSWORD_HERE").encode()
+CA_PWD = os.environ.get("PKI_CA_KEY_PASSWORD", "CHANGE_ME_IN_PRODUCTION").encode()
 
 def backup_old():
     """备份旧CA文件"""
@@ -43,7 +45,9 @@ def backup_old():
 def create_root_ca():
     """创建根CA"""
     print("\n[1/4] 创建根CA（发证总局）...")
-    key = rsa.generate_private_key(65537, 2048, default_backend())
+    algo = os.environ.get("PKI_SIGNATURE_ALGORITHM", "RSA")
+    key = generate_keypair()
+    print(f"  算法: {algo}")
 
     # 保存私钥
     key_path = PKI_DEMO / "keys" / "root_ca_private.pem"
@@ -78,7 +82,7 @@ def create_root_ca():
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(key, hashes.SHA256(), default_backend())
+        .sign(key, get_hash_algorithm(), default_backend())
     )
 
     cert_path = PKI_DEMO / "certs" / "root_ca_cert.pem"
@@ -90,7 +94,7 @@ def create_root_ca():
 def create_intermediate_ca(root_key, root_cert):
     """创建中间CA"""
     print("\n[2/4] 创建中间CA（二级发证机构）...")
-    key = rsa.generate_private_key(65537, 2048, default_backend())
+    key = generate_keypair()
 
     # 保存私钥
     key_path = PKI_DEMO / "keys" / "inter_ca_private.pem"
@@ -125,7 +129,7 @@ def create_intermediate_ca(root_key, root_cert):
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(root_key, hashes.SHA256(), default_backend())
+        .sign(root_key, get_signature_hash(), default_backend())
     )
 
     cert_path = PKI_DEMO / "certs" / "inter_ca_cert.pem"
@@ -137,7 +141,7 @@ def create_intermediate_ca(root_key, root_cert):
 def issue_localhost_cert(ca_key, ca_cert, ca_type="中间CA"):
     """为localhost签发TLS服务器证书"""
     print(f"\n[3/4] 使用{ca_type}为localhost签发TLS服务器证书...")
-    key = rsa.generate_private_key(65537, 2048, default_backend())
+    key = generate_keypair()
 
     # 保存服务器私钥（不加密，供Nginx直接使用）
     NGINX_CERT_DIR.mkdir(parents=True, exist_ok=True)
@@ -178,7 +182,7 @@ def issue_localhost_cert(ca_key, ca_cert, ca_type="中间CA"):
             crl_sign=False, encipher_only=False, decipher_only=False,
         ), critical=True)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .sign(ca_key, hashes.SHA256(), default_backend())
+        .sign(ca_key, get_signature_hash(), default_backend())
     )
 
     cert_path = NGINX_CERT_DIR / "pki_server_cert.pem"
@@ -191,7 +195,7 @@ def issue_localhost_cert(ca_key, ca_cert, ca_type="中间CA"):
 def copy_to_nginx():
     """复制证书到Nginx目录（避免路径空格问题）"""
     print("\n[4/4] 复制证书到Nginx目录...")
-    nginx_dir = Path("D:/nginx-1.30.1/html")
+    nginx_dir = Path(os.environ.get("PKI_NGINX_HTML_DIR", "C:/path/to/nginx/html"))
     certs = {
         "pki_server_cert.pem": NGINX_CERT_DIR / "pki_server_cert.pem",
         "pki_server_key.pem": NGINX_CERT_DIR / "pki_server_key.pem",

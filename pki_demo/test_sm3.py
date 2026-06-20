@@ -8,7 +8,7 @@ print("  SM3国密哈希算法功能验证")
 print("=" * 60)
 
 # 测试1：SM3在算法映射表中
-from security_crypto import HASH_ALGORITHM_MAP, get_hash_algorithm
+from .security_crypto import HASH_ALGORITHM_MAP, get_hash_algorithm
 assert "SM3" in HASH_ALGORITHM_MAP, "SM3不在映射表中！"
 print("[PASS] SM3已注册到HASH_ALGORITHM_MAP")
 
@@ -52,7 +52,7 @@ assert algo_from_env_default.name != "sm3", "清除环境变量后应恢复默�
 print("[PASS] PKI_HASH_ALGORITHM=SM3 环境变量切换正常")
 
 # 测试7：安全加密模块文件完整性校验使用SM3
-from security_crypto import FileIntegrityChecker
+from .security_crypto import FileIntegrityChecker
 checker = FileIntegrityChecker()
 test_file = os.path.join(os.path.dirname(__file__), "config.py")
 if os.path.exists(test_file):
