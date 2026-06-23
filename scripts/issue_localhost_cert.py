@@ -18,7 +18,7 @@ from cryptography.hazmat.backends import default_backend
 from ipaddress import ip_address
 
 from config import CFG
-from security_crypto import get_hash_algorithm, get_rsa_key_size
+from security_crypto import get_signature_hash, sign_certificate_with_hash, get_rsa_key_size
 
 BASE_DIR = Path(__file__).parent.parent
 PKI_DEMO = BASE_DIR / "pki_demo"
@@ -90,7 +90,7 @@ def main():
         IPAddress(ip_address("::1")),
     ]
 
-    server_cert = (
+    server_cert_builder = (
         x509.CertificateBuilder()
         .subject_name(x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
@@ -118,12 +118,12 @@ def main():
         .add_extension(x509.ExtendedKeyUsage([
             ExtendedKeyUsageOID.SERVER_AUTH,
         ]), critical=False)
-        .sign(ca_key, get_hash_algorithm(), default_backend())
     )
+    cert_pem = sign_certificate_with_hash(server_cert_builder, ca_key, get_signature_hash(), default_backend())
 
     server_cert_path = NGINX_CERT_DIR / "pki_server_cert.pem"
     with open(server_cert_path, "wb") as f:
-        f.write(server_cert.public_bytes(serialization.Encoding.PEM))
+        f.write(cert_pem)
     print(f"  [OK] 服务器证书已保存: {server_cert_path}")
 
     # 4. 复制根CA证书供客户端信任

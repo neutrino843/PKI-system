@@ -745,6 +745,43 @@
             </div>
         </div>
 
+        <!-- 审核意见/拒绝原因模态框 -->
+        <div id="modal-csr-note" class="modal-overlay">
+            <div class="modal-box" style="max-width:480px">
+                <div class="modal-header">
+                    <h2 id="csrNoteTitle">审核意见</h2>
+                    <button class="modal-close" onclick="UI.hideModal('modal-csr-note')">✕</button>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label" id="csrNoteLabel">审核意见(可选):</label>
+                    <textarea id="csrNoteInput" class="hand-input" rows="3" style="resize:vertical;width:100%;padding:10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-family:inherit;font-size:0.9rem" placeholder="输入审核意见..."></textarea>
+                </div>
+                <div class="form-actions" style="margin-top:16px">
+                    <button type="button" class="hand-btn" onclick="UI.hideModal('modal-csr-note')">取消</button>
+                    <button type="button" id="csrNoteConfirm" class="hand-btn hand-btn-primary">确认</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PKCS#12 导出密码模态框 -->
+        <div id="modal-p12-pwd" class="modal-overlay">
+            <div class="modal-box" style="max-width:420px">
+                <div class="modal-header">
+                    <h2>🔐 导出PKCS#12</h2>
+                    <button class="modal-close" onclick="UI.hideModal('modal-p12-pwd')">✕</button>
+                </div>
+                <div class="form-group">
+                    <label class="hand-label" id="p12Label">设置导出密码:</label>
+                    <input id="p12PwdInput" class="hand-input" type="password" value="p12_export_123" style="width:100%;padding:10px;border:1px solid var(--color-border);border-radius:var(--radius-sm);font-family:inherit;font-size:0.9rem">
+                    <div style="font-size:0.75rem;color:var(--color-text-light);margin-top:4px">至少6位字符</div>
+                </div>
+                <div class="form-actions" style="margin-top:16px">
+                    <button type="button" class="hand-btn" onclick="UI.hideModal('modal-p12-pwd')">取消</button>
+                    <button type="button" id="p12ConfirmBtn" class="hand-btn hand-btn-primary">确认导出</button>
+                </div>
+            </div>
+        </div>
+
     </div><!-- /appContainer -->
 
     <!-- 时间戳申请模态框 -->

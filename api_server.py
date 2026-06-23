@@ -33,7 +33,9 @@ from pki_demo.auth import (_session_manager as auth_sm, Permission, Role,
 from pki_demo.audit import audit_logger
 from pki_demo.ra import ra_manager
 from pki_demo.security_crl import SecureRevokedList
-from pki_demo.security_crypto import get_hash_algorithm, get_rsa_key_size, generate_keypair, FileIntegrityChecker
+from pki_demo.security_crypto import (get_hash_algorithm, get_signature_hash,
+    sign_certificate_with_hash, sign_csr_with_hash, sign_crl_with_hash,
+    get_rsa_key_size, generate_keypair, FileIntegrityChecker)
 from pki_demo.backup import BackupManager
 from pki_demo.cert_expiry import CertExpiryChecker
 from pki_demo.database import init_database, transaction
@@ -54,7 +56,7 @@ from pki_demo.cert_template import (CertTemplateType, list_templates,
     get_default_validity)
 
 # OCSP 在线证书状态协议
-from pki_demo.ocsp import ocsp_responder
+from pki_demo.ocsp import ocsp_responder, OCSP_CONTENT_TYPE
 
 # SCEP/EST 自动注册协议
 from pki_demo.scep_est import scep_handler, est_handler
@@ -856,7 +858,7 @@ def api_csr_apply():
             f.write(pem_data)
 
         # 生成CSR
-        csr = (
+        csr_builder = (
             x509.CertificateSigningRequestBuilder()
             .subject_name(x509.Name([
                 x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
@@ -864,11 +866,11 @@ def api_csr_apply():
                 x509.NameAttribute(NameOID.COMMON_NAME, cn),
             ]))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .sign(private_key, get_hash_algorithm(), default_backend())
         )
+        csr_pem = sign_csr_with_hash(csr_builder, private_key, get_signature_hash(), default_backend())
         csr_path = PKI_DEMO_DIR / "csr" / f"user_{safe_tag}_{ts}_csr.pem"
         with open(csr_path, "wb") as f:
-            f.write(csr.public_bytes(serialization.Encoding.PEM))
+            f.write(csr_pem)
 
         # 提交RA
         csr_id = f"CSR-{safe_tag}-{ts}"
@@ -1003,7 +1005,15 @@ def api_csr_approve_second():
     if success:
         audit_logger.log("CSR_SECOND_APPROVE", get_current_username(), "UPDATE",
                          csr_id, "SUCCESS", msg, get_current_role())
-        return jsonify({"message": msg})
+        # 二审通过后自动签发证书
+        try:
+            _issue_single_cert(csr_id)
+            return jsonify({"message": f"申请 {csr_id} 已通过二审，证书已自动签发"})
+        except Exception as e:
+            return jsonify({
+                "message": msg,
+                "warning": f"审核通过，但证书自动签发失败: {str(e)}，请使用签发按钮手动签发"
+            })
     return jsonify({"error": msg}), 400
 
 
@@ -1036,7 +1046,7 @@ def api_csr_approved():
             "org": item["org"],
             "submittedAt": item.get("submitted_at", "")[:19],
             "approvedAt": item.get("approved_at", "")[:19],
-            "issued": item.get("issued", False)
+            "issued": False  # 在approved_list中均为待签发
         })
     return jsonify(result)
 
@@ -1052,9 +1062,13 @@ def api_csr_my_applications():
     pending_list = ra_manager.get_pending_list()
     my_pending = [item for item in pending_list if item.get("applicant") == username]
 
-    # 从approved中查询
+    # 从approved（待签发）中查询
     approved_list = ra_manager.get_approved_list()
     my_approved = [item for item in approved_list if item.get("applicant") == username]
+
+    # 从已签发中查询
+    issued_list = ra_manager.get_issued_list()
+    my_issued = [item for item in issued_list if item.get("applicant") == username]
 
     result = []
     for item in my_pending:
@@ -1070,15 +1084,22 @@ def api_csr_my_applications():
             "statusText": status_text,
         })
     for item in my_approved:
-        issued = item.get("issued", False)
-        status_text = "已签发" if issued else "已批准待签发"
         result.append({
             "id": item["csr_id"],
             "cn": item["username"],
             "org": item["org"],
             "submittedAt": item.get("submitted_at", "")[:19],
-            "status": "issued" if issued else item["status"],
-            "statusText": status_text,
+            "status": "approved",
+            "statusText": "已批准待签发",
+        })
+    for item in my_issued:
+        result.append({
+            "id": item["csr_id"],
+            "cn": item["username"],
+            "org": item["org"],
+            "submittedAt": item.get("submitted_at", "")[:19],
+            "status": "issued",
+            "statusText": "已签发",
         })
 
     # 按提交时间倒序
@@ -1218,7 +1239,7 @@ def _issue_single_cert(csr_id, san_dns=None, san_ip=None,
     user_cert = apply_template_to_builder(user_cert, template_type)
 
     # CA签名
-    user_cert = user_cert.sign(ca_key, get_hash_algorithm(), default_backend())
+    cert_pem = sign_certificate_with_hash(user_cert, ca_key, get_signature_hash(), default_backend())
 
     # 从CSR ID提取标识(tag+ts)，与密钥文件命名一致
     csr_parts = csr_id.split('-')  # CSR-{safe_tag}-{ts}
@@ -1227,14 +1248,14 @@ def _issue_single_cert(csr_id, san_dns=None, san_ip=None,
     cert_filename = f"user_{safe_tag}_{csr_ts}_cert.pem"
     cert_path = BASE_DIR / "pki_demo/certs" / cert_filename
     with open(cert_path, "wb") as f:
-        f.write(user_cert.public_bytes(serialization.Encoding.PEM))
+        f.write(cert_pem)
 
     ra_manager.mark_issued(item["csr_id"])
     audit_logger.log("CERT_ISSUE", get_current_username(), "CREATE",
                      cert_filename, "SUCCESS",
                      f"为用户{item['username']}签发证书", get_current_role())
 
-    return user_cert
+    return cert_pem
 
 
 # ============================================================
@@ -1347,10 +1368,10 @@ def api_generate_crl():
             except:
                 pass
 
-        crl = crl_builder.sign(ca_key, get_hash_algorithm(), default_backend())
+        crl_pem = sign_crl_with_hash(crl_builder, ca_key, get_signature_hash(), default_backend())
         crl_path = BASE_DIR / "pki_demo/crl/ca_crl.pem"
         with open(crl_path, "wb") as f:
-            f.write(crl.public_bytes(serialization.Encoding.PEM))
+            f.write(crl_pem)
 
         audit_logger.log("CRL_GEN", get_current_username(), "CREATE",
                          "ca_crl.pem", "SUCCESS",
@@ -1431,6 +1452,35 @@ def api_ocsp_clear_cache():
         return error(code=ErrorCode.AUTH_PERMISSION_DENIED,
                      message=str(e), http_status=403)
     return jsonify(ocsp_responder.clear_cache())
+
+
+@app.route("/api/ocsp/signed/<serial>", methods=["GET"])
+def api_ocsp_signed(serial):
+    """RFC 6960 合规签名 OCSP 响应（DER 编码）
+
+    返回 application/ocsp-response 类型的 DER 编码 OCSP 响应，
+    使用 OCSP Responder 证书进行签名，符合 OCSP 协议合规要求。
+    """
+    try:
+        der_bytes = ocsp_responder.build_signed_response(serial)
+        if der_bytes is None:
+            return error(code=ErrorCode.INTERNAL_ERROR,
+                         message="OCSP响应构建失败", http_status=500)
+        return Response(der_bytes, mimetype=OCSP_CONTENT_TYPE)
+    except Exception as e:
+        return error(code=ErrorCode.INTERNAL_ERROR,
+                     message=f"OCSP签名响应失败: {str(e)}", http_status=500)
+
+
+@app.route("/api/ocsp/responder-cert", methods=["GET"])
+def api_ocsp_responder_cert():
+    """获取 OCSP Responder 证书（PEM 格式）"""
+    try:
+        pem_bytes = ocsp_responder.get_responder_cert_pem()
+        return Response(pem_bytes, mimetype="application/x-pem-file")
+    except Exception as e:
+        return error(code=ErrorCode.INTERNAL_ERROR,
+                     message=f"获取OCSP响应者证书失败: {str(e)}", http_status=500)
 
 
 # ============================================================

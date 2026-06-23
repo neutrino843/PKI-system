@@ -22,7 +22,7 @@ from cryptography.x509.oid import NameOID, ExtensionOID
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 
-from .security_crypto import get_hash_algorithm
+from .security_crypto import get_signature_hash, sign_crl_with_hash
 from .config import CFG
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -195,16 +195,14 @@ def generate_crl(crl_filepath=None):
     )
 
     # 用CA私钥签名CRL
-    crl = crl_builder.sign(
-        private_key=ca_key,
-        algorithm=get_hash_algorithm(),
-        backend=default_backend()
+    crl_pem = sign_crl_with_hash(
+        crl_builder, ca_key,
+        get_signature_hash(), default_backend()
     )
 
     # 保存CRL文件
-    pem_data = crl.public_bytes(serialization.Encoding.PEM)
     with open(crl_filepath, 'wb') as f:
-        f.write(pem_data)
+        f.write(crl_pem)
 
     print(f"   [OK] CRL生成成功！")
     print(f"   ├─ 颁发者（发证机关）：{issuer.rfc4514_string()}")

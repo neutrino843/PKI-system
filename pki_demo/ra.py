@@ -221,13 +221,31 @@ class RAManager:
             return []
 
     def get_approved_list(self):
-        """获取已批准列表"""
+        """获取已批准（待签发）列表"""
         from .database import get_connection
         try:
             with transaction() as conn:
                 rows = conn.execute(
                     "SELECT * FROM approved_csr WHERE status = ? ORDER BY approved_at DESC",
                     (CSRStatus.APPROVED,)
+                ).fetchall()
+            result = []
+            for r in rows:
+                item = dict(r)
+                item["audit_history"] = json.loads(item.get("audit_history") or "[]")
+                result.append(item)
+            return result
+        except Exception:
+            return []
+
+    def get_issued_list(self):
+        """获取已签发列表"""
+        from .database import get_connection
+        try:
+            with transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM approved_csr WHERE status = ? ORDER BY issued_at DESC",
+                    (CSRStatus.ISSUED,)
                 ).fetchall()
             result = []
             for r in rows:

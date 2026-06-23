@@ -66,7 +66,7 @@ def create_root_ca():
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PKI演示系统"),
         x509.NameAttribute(NameOID.COMMON_NAME, "演示根CA"),
     ])
-    cert = (
+    cert_builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
@@ -82,14 +82,15 @@ def create_root_ca():
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(key, get_hash_algorithm(), default_backend())
     )
+    cert_pem = sign_certificate_with_hash(cert_builder, key, get_signature_hash(), default_backend())
+    cert_serial = cert_builder._serial_number
 
     cert_path = PKI_DEMO / "certs" / "root_ca_cert.pem"
     with open(cert_path, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
-    print(f"  [OK] 根CA证书: {cert_path} (序列号: {cert.serial_number})")
-    return key, cert
+        f.write(cert_pem)
+    print(f"  [OK] 根CA证书: {cert_path} (序列号: {cert_serial})")
+    return key, cert_pem
 
 def create_intermediate_ca(root_key, root_cert):
     """创建中间CA"""

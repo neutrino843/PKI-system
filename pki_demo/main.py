@@ -25,7 +25,9 @@ from .auth import (_session_manager as auth_sm, Permission, Role,
 from .audit import audit_logger
 from .ra import ra_manager
 from .security_crl import SecureRevokedList
-from .security_crypto import get_signature_hash, generate_keypair, get_signature_algorithm, FileIntegrityChecker
+from .security_crypto import (get_signature_hash, generate_keypair,
+    get_signature_algorithm, FileIntegrityChecker,
+    sign_certificate_with_hash, sign_csr_with_hash, sign_crl_with_hash)
 from .backup import BackupManager
 from .inter_ca import generate_intermediate_ca
 from .cert_expiry import CertExpiryChecker
@@ -195,7 +197,7 @@ def _create_root_ca():
         x509.NameAttribute(NameOID.COMMON_NAME, name),
     ])
     now = datetime.now(timezone.utc)
-    cert = (
+    cert_builder = (
         x509.CertificateBuilder()
         .subject_name(subject)
         .issuer_name(issuer)
@@ -211,12 +213,13 @@ def _create_root_ca():
             key_encipherment=False, data_encipherment=False,
             key_agreement=False, encipher_only=False, decipher_only=False,
         ), critical=True)
-        .sign(private_key, hashes.SHA256(), default_backend())
     )
+    cert_serial = cert_builder._serial_number
+    pem_bytes = sign_certificate_with_hash(cert_builder, private_key, get_signature_hash(), default_backend())
 
     cert_path = BASE_DIR / "certs" / "root_ca_cert.pem"
     with open(cert_path, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
+        f.write(pem_bytes)
 
     audit_logger.log("CA_CREATE", get_current_username(), "CREATE",
                      "root_ca", "SUCCESS", f"创建根CA: {name}", get_current_role())
@@ -224,7 +227,7 @@ def _create_root_ca():
     print(f"""
   [OK] 根CA创建成功！
   名称: {name}  组织: {org}
-  序列号: {cert.serial_number}  有效期: {years}年
+  序列号: {cert_serial}  有效期: {years}年
   私钥: keys/root_ca_private.pem(已加密)
   证书: certs/root_ca_cert.pem
     """)
@@ -328,7 +331,7 @@ def _apply_new_cert():
     with open(key_path, "wb") as f:
         f.write(pem_data)
 
-    csr = (
+    csr_builder = (
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([
             x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
@@ -336,12 +339,12 @@ def _apply_new_cert():
             x509.NameAttribute(NameOID.COMMON_NAME, name),
         ]))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .sign(private_key, hashes.SHA256(), default_backend())
     )
+    csr_pem = sign_csr_with_hash(csr_builder, private_key, get_signature_hash(), default_backend())
 
     csr_path = BASE_DIR / "csr" / f"user_{name}_csr.pem"
     with open(csr_path, "wb") as f:
-        f.write(csr.public_bytes(serialization.Encoding.PEM))
+        f.write(csr_pem)
 
     # 通过RA提交申请
     csr_id = f"CSR-{name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -479,7 +482,7 @@ def _issue_approved_certs():
             csr = x509.load_pem_x509_csr(f.read(), default_backend())
 
         now = datetime.now(timezone.utc)
-        user_cert = (
+        cert_builder = (
             x509.CertificateBuilder()
             .subject_name(csr.subject)
             .issuer_name(ca_cert.subject)
@@ -494,12 +497,12 @@ def _issue_approved_certs():
                 key_agreement=False, key_cert_sign=False,
                 crl_sign=False, encipher_only=False, decipher_only=False,
             ), critical=True)
-            .sign(ca_key, hashes.SHA256(), default_backend())
         )
+        cert_pem = sign_certificate_with_hash(cert_builder, ca_key, get_signature_hash(), default_backend())
 
         cert_path = BASE_DIR / "certs" / f"user_{item['username']}_cert.pem"
         with open(cert_path, "wb") as f:
-            f.write(user_cert.public_bytes(serialization.Encoding.PEM))
+            f.write(cert_pem)
 
         ra_manager.mark_issued(item["csr_id"])
         audit_logger.log("CERT_ISSUE", get_current_username(), "CREATE",

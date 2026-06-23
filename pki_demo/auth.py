@@ -81,7 +81,8 @@ ROLE_PERMISSIONS = {
         Permission.TSA_MANAGE,
     ],
     Role.RA_OPERATOR: [
-        Permission.APPROVE_CSR, Permission.VERIFY_IDENTITY,
+        Permission.APPROVE_CSR, Permission.ISSUE_CERT,
+        Permission.VERIFY_IDENTITY,
         Permission.VIEW_ALL_CERTS, Permission.APPLY_CERT,
         Permission.VIEW_OWN_CERT, Permission.EXPORT_P12,
         Permission.TSA_TIMESTAMP, Permission.TSA_VERIFY,

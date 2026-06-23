@@ -340,8 +340,30 @@ async function renderRARequests() {
     }
 }
 
+// ---- CSR 审核状态变量（用于模态框回调） ----
+let _pendingApproveId = null;
+let _pendingApproveStatus = null;
+let _pendingRejectId = null;
+
 async function approveCSR(id, status) {
-    const note = prompt('审核意见(可选):') || '';
+    _pendingApproveId = id;
+    _pendingApproveStatus = status;
+    document.getElementById('csrNoteTitle').textContent = '审核意见';
+    document.getElementById('csrNoteLabel').textContent = '审核意见(可选):';
+    document.getElementById('csrNoteInput').value = '';
+    document.getElementById('csrNoteInput').placeholder = '输入审核意见...';
+    document.getElementById('csrNoteConfirm').onclick = doApproveCSR;
+    UI.showModal('modal-csr-note');
+}
+
+async function doApproveCSR() {
+    const id = _pendingApproveId;
+    const status = _pendingApproveStatus;
+    const note = document.getElementById('csrNoteInput').value || '';
+    _pendingApproveId = null;
+    _pendingApproveStatus = null;
+    UI.hideModal('modal-csr-note');
+
     try {
         let resp;
         if (status === 'first_approved') {
@@ -359,8 +381,25 @@ async function approveCSR(id, status) {
 }
 
 async function rejectCSR(id) {
-    const reason = prompt('填写拒绝原因:');
-    if (!reason) return;
+    _pendingRejectId = id;
+    document.getElementById('csrNoteTitle').textContent = '拒绝原因';
+    document.getElementById('csrNoteLabel').textContent = '请填写拒绝原因:';
+    document.getElementById('csrNoteInput').value = '';
+    document.getElementById('csrNoteInput').placeholder = '输入拒绝原因...';
+    document.getElementById('csrNoteConfirm').onclick = doRejectCSR;
+    UI.showModal('modal-csr-note');
+}
+
+async function doRejectCSR() {
+    const id = _pendingRejectId;
+    const reason = document.getElementById('csrNoteInput').value || '';
+    _pendingRejectId = null;
+    UI.hideModal('modal-csr-note');
+
+    if (!reason) {
+        UI.toast('请填写拒绝原因', 'warning');
+        return;
+    }
     try {
         const resp = await API.rejectCsr(id, reason);
         UI.toast(resp.message, 'warning');
@@ -384,10 +423,28 @@ async function issueCertCSR(id) {
 }
 
 /* ----- CRL吊销 ----- */
+let _pendingP12Serial = null;
+let _pendingP12Cn = null;
+
 async function exportP12(serial, cn) {
-    const pwd = prompt(`为 ${cn} 的证书设置PKCS#12导出密码（至少6位）:`, 'p12_export_123');
+    _pendingP12Serial = serial;
+    _pendingP12Cn = cn;
+    document.getElementById('p12Label').textContent = `为 ${cn} 设置导出密码:`;
+    document.getElementById('p12PwdInput').value = 'p12_export_123';
+    document.getElementById('p12ConfirmBtn').onclick = doExportP12;
+    UI.showModal('modal-p12-pwd');
+}
+
+async function doExportP12() {
+    const serial = _pendingP12Serial;
+    const cn = _pendingP12Cn;
+    const pwd = document.getElementById('p12PwdInput').value || '';
+    _pendingP12Serial = null;
+    _pendingP12Cn = null;
+    UI.hideModal('modal-p12-pwd');
+
     if (!pwd || pwd.length < 6) {
-        if (pwd) UI.toast('密码至少6位', 'warning');
+        UI.toast('密码至少6位', 'warning');
         return;
     }
     try {
